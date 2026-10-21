@@ -50,7 +50,7 @@ from .ani_rss_format import (
 )
 from .ani_rss_service import EDITABLE_FIELDS, AniRssService
 
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.1.1"
 
 _ADD_OPTIONS = {
     "type",
@@ -353,7 +353,7 @@ class AniRssControlPlugin(Star):
     # ------------------------------------------------------------------
     # 主 RSS
     # ------------------------------------------------------------------
-    @ani_group.command_group("main", alias={"主"})
+    @ani_group.group("main", alias={"主"})
     def ani_main_group(self) -> None:
         """主 RSS 操作。"""
 
@@ -425,7 +425,7 @@ class AniRssControlPlugin(Star):
     # ------------------------------------------------------------------
     # 备用 RSS
     # ------------------------------------------------------------------
-    @ani_group.command_group("standby", alias={"备"})
+    @ani_group.group("standby", alias={"备"})
     def ani_standby_group(self) -> None:
         """备用 RSS 操作。"""
 
