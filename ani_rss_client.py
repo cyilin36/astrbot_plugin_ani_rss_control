@@ -257,6 +257,79 @@ class AniRssClient:
 
         return await self._request("torrentsInfos")
 
+    # ------------------------------------------------------------------
+    # 片源搜索
+    # ------------------------------------------------------------------
+    async def search_mikan(
+        self,
+        text: str,
+        season: Mapping[str, Any] | None = None,
+    ) -> Any:
+        """按关键词与季度搜索 Mikan 番剧。"""
+
+        return await self._request(
+            "mikan",
+            payload=dict(season or {}),
+            params={"text": text},
+            timeout=self._rss_timeout,
+        )
+
+    async def mikan_groups(self, url: str) -> Any:
+        """获取 Mikan 番剧页的字幕组与剧集。"""
+
+        return await self._request(
+            "mikanGroup",
+            params={"url": url},
+            timeout=self._rss_timeout,
+        )
+
+    async def search_anibt(
+        self,
+        *,
+        title: str = "",
+        season: str = "",
+        bgm_url: str = "",
+    ) -> Any:
+        """搜索 AniBT 番剧。"""
+
+        payload = {
+            "title": title,
+            "season": season,
+            "bgmUrl": bgm_url,
+        }
+        return await self._request(
+            "aniBT",
+            payload=payload,
+            timeout=self._rss_timeout,
+        )
+
+    async def anibt_groups(self, bgm_id: str) -> Any:
+        """获取 AniBT 番剧的字幕组与剧集。"""
+
+        return await self._request(
+            "aniBTGroup",
+            params={"bgmId": bgm_id},
+            timeout=self._rss_timeout,
+        )
+
+    async def anime_garden_list(self, bgm_url: str = "") -> Any:
+        """获取 AnimeGarden 番剧列表或单部番剧。"""
+
+        return await self._request(
+            "animeGardenList",
+            params={"bgmUrl": bgm_url},
+            timeout=self._rss_timeout,
+        )
+
+    async def anime_garden_groups(self, bgm_id: str) -> Any:
+        """获取 AnimeGarden 番剧的字幕组与剧集。"""
+
+        return await self._request(
+            "animeGardenGroup",
+            params={"bgmId": bgm_id},
+            timeout=self._rss_timeout,
+        )
+
     async def get_config(self) -> Any:
         """获取 ani-rss 配置。
 

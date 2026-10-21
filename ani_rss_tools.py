@@ -24,9 +24,12 @@ from .ani_rss_format import (
     format_downloads,
     format_edit_result,
     format_enable_result,
+    format_episode_result,
     format_path_result,
     format_refresh_result,
     format_rss_preview,
+    format_search_results,
+    format_source_groups,
     format_standby_change,
     format_standby_list,
     format_status,
@@ -45,9 +48,13 @@ _QUERY_ACTIONS = (
     "downloads",
     "preview",
     "standby_list",
+    "search",
+    "groups",
+    "magnet",
 )
 _SUBSCRIPTION_ACTIONS = (
     "add",
+    "add_group",
     "edit",
     "delete",
     "set_enabled",
@@ -155,6 +162,29 @@ def _as_int(
     return parsed
 
 
+def _as_float(
+    value: Any,
+    name: str,
+    default: float | None = None,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float | None:
+    if value is None or str(value).strip() == "":
+        return default
+    try:
+        if isinstance(value, bool):
+            raise ValueError
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise AniRssValidationError(f"{name} 必须是数字。") from exc
+    if minimum is not None and parsed < minimum:
+        raise AniRssValidationError(f"{name} 不能小于 {minimum}。")
+    if maximum is not None and parsed > maximum:
+        raise AniRssValidationError(f"{name} 不能大于 {maximum}。")
+    return parsed
+
+
 def _as_str_list(value: Any, name: str) -> list[str]:
     if value is None:
         return []
@@ -226,11 +256,15 @@ class AniRssQueryTool(_AniRssTool):
     name: str = "ani_rss_query"
     description: str = (
         "查询 ani-rss 的连接状态、订阅列表、订阅详情、下载路径、下载任务、"
-        "RSS 解析预览或备用 RSS 列表。"
-        "action 必填，取值：help、status、list、info、path、downloads、preview、standby_list。"
+        "RSS 解析预览、备用 RSS 列表，或搜索片源、查看字幕组、查询单集磁力。"
+        "action 必填，取值：help、status、list、info、path、downloads、preview、"
+        "standby_list、search、groups、magnet。"
         "info/path/standby_list 需要 selector；list 可用 keyword/page/size；"
         "downloads 可用 keyword/limit；preview 需要 url，可选 rss_type/bgm/subgroup/standby。"
-        "仅在用户明确询问 ani-rss 数据或需要预览 RSS 时调用，不要主动轮询。"
+        "search 可用 keyword/source/season/bgm/limit，返回带 ref 的番剧列表；"
+        "groups 需要 search 返回的 ref；magnet 需要 ref、group（序号或名称）"
+        "以及 episode（集数）或 index（条目序号）。"
+        "仅在用户明确询问 ani-rss 数据或需要搜索/预览时调用，不要主动轮询。"
     )
     parameters: dict[str, Any] = field(
         default_factory=lambda: {
@@ -247,7 +281,7 @@ class AniRssQueryTool(_AniRssTool):
                 },
                 "keyword": {
                     "type": _STRING_SCHEMA,
-                    "description": "标题、字幕组、id 或下载任务名关键词。",
+                    "description": "订阅列表关键词，或 search 的番剧搜索关键词。",
                 },
                 "page": {
                     "type": _NUMBER_SCHEMA,
@@ -259,7 +293,7 @@ class AniRssQueryTool(_AniRssTool):
                 },
                 "limit": {
                     "type": _NUMBER_SCHEMA,
-                    "description": "下载任务显示条数，1-50，默认 10。",
+                    "description": "下载任务条数、搜索结果条数或字幕组剧集预览条数。",
                 },
                 "url": {
                     "type": _STRING_SCHEMA,
@@ -272,7 +306,33 @@ class AniRssQueryTool(_AniRssTool):
                 },
                 "bgm": {
                     "type": _STRING_SCHEMA,
-                    "description": "preview 时的 BGM 地址。",
+                    "description": "preview 的 BGM 地址，或 search 时按 BGM 精确查找。",
+                },
+                "source": {
+                    "type": _STRING_SCHEMA,
+                    "enum": ["mikan", "ani-bt", "anime-garden"],
+                    "description": "search 时的片源类型，默认取插件配置；"
+                    "groups/magnet 传入裸标识时也用该参数指定来源。",
+                },
+                "season": {
+                    "type": _STRING_SCHEMA,
+                    "description": "search 时的季度，例如 2026春。",
+                },
+                "ref": {
+                    "type": _STRING_SCHEMA,
+                    "description": "search 返回的片源引用，例如 mikan:https://...。",
+                },
+                "group": {
+                    "type": _STRING_SCHEMA,
+                    "description": "magnet 时的字幕组序号（从 1 开始）或名称。",
+                },
+                "episode": {
+                    "type": _NUMBER_SCHEMA,
+                    "description": "magnet 时要查询的集数，例如 5 或 12.5。",
+                },
+                "index": {
+                    "type": _NUMBER_SCHEMA,
+                    "description": "magnet 时的剧集条目序号（从 1 开始），与 episode 二选一。",
                 },
                 "subgroup": {
                     "type": _STRING_SCHEMA,
@@ -346,6 +406,58 @@ class AniRssQueryTool(_AniRssTool):
                 mask_urls=plugin.mask_rss_urls,
             )
 
+        if act == "search":
+            data = await plugin.service.search_source(
+                str(values.get("keyword") or "").strip(),
+                source=_optional_text(values.get("source")),
+                season=_optional_text(values.get("season")),
+                bgm_url=_optional_text(values.get("bgm")),
+                limit=_as_int(values.get("limit"), "limit", minimum=1, maximum=50),
+            )
+            return format_search_results(data)
+
+        if act == "groups":
+            ref = _require_value(values.get("ref"), "ref")
+            data = await plugin.service.source_groups(
+                ref,
+                source=_optional_text(values.get("source")),
+                limit=_as_int(
+                    values.get("limit"),
+                    "limit",
+                    minimum=1,
+                    maximum=10,
+                ),
+            )
+            return format_source_groups(
+                data,
+                mask_urls=plugin.mask_rss_urls,
+            )
+
+        if act == "magnet":
+            ref = _require_value(values.get("ref"), "ref")
+            group = _require_value(values.get("group"), "group")
+            index = _as_int(values.get("index"), "index", minimum=1)
+            episode = _as_float(values.get("episode"), "episode", minimum=0.1)
+            if index is not None and episode is not None:
+                raise AniRssValidationError(
+                    "episode 与 index 只能指定一个。",
+                )
+            if index is None and episode is None:
+                raise AniRssValidationError(
+                    "magnet 需要 episode（集数）或 index（条目序号）。",
+                )
+            data = await plugin.service.source_episode(
+                ref,
+                group,
+                source=_optional_text(values.get("source")),
+                episode=episode,
+                index=index,
+            )
+            return format_episode_result(
+                data,
+                mask_urls=plugin.mask_rss_urls,
+            )
+
         if act == "standby_list":
             selector = _require_value(values.get("selector"), "selector")
             ani = await plugin.service.standby_list(selector)
@@ -358,12 +470,15 @@ class AniRssQueryTool(_AniRssTool):
 class AniRssSubscriptionTool(_AniRssTool):
     name: str = "ani_rss_subscription"
     description: str = (
-        "管理 ani-rss 订阅。action 必填，取值：add、edit、delete、set_enabled、refresh、update_total。"
-        "add 需要 url；edit 需要 selector 和至少一个待修改字段；delete/set_enabled 需要 targets；"
+        "管理 ani-rss 订阅。action 必填，取值：add、add_group、edit、delete、"
+        "set_enabled、refresh、update_total。"
+        "add 需要 url；add_group 需要 ref（ani_rss_query 的 search 返回）和"
+        "group（字幕组序号或名称），用于直接订阅搜索结果中的字幕组；"
+        "edit 需要 selector 和至少一个待修改字段；delete/set_enabled 需要 targets；"
         "refresh 可传 targets（为空表示全部）；update_total 可传 targets（默认 all）和 force。"
         "危险操作：delete 先不要传 confirm，先向用户展示预览，用户明确同意后再传 confirm=true；"
         "files=true 仅当用户明确要求删除本地文件且插件配置允许时使用；"
-        "add 的 override=true 必须同时传 confirm=true。"
+        "add/add_group 的 override=true 必须同时传 confirm=true。"
         "修改标题、季或下载路径时默认不移动已下载视频，只有用户明确要求移动时才传 move=true。"
         "主 RSS 的添加、修改、删除分别对应 add、edit、delete；查看主 RSS 请用 ani_rss_query 的 info。"
     )
@@ -379,6 +494,19 @@ class AniRssSubscriptionTool(_AniRssTool):
                 "selector": {
                     "type": _STRING_SCHEMA,
                     "description": "edit 时的订阅 id、唯一前缀或标题。",
+                },
+                "ref": {
+                    "type": _STRING_SCHEMA,
+                    "description": "add_group 时 ani_rss_query 的 search 返回的片源引用。",
+                },
+                "group": {
+                    "type": _STRING_SCHEMA,
+                    "description": "add_group 时的字幕组序号（从 1 开始）或名称。",
+                },
+                "source": {
+                    "type": _STRING_SCHEMA,
+                    "enum": ["mikan", "ani-bt", "anime-garden"],
+                    "description": "add_group 时 ref 未带来源前缀则用该参数指定。",
                 },
                 "targets": {
                     "type": _ARRAY_SCHEMA,
@@ -525,6 +653,26 @@ class AniRssSubscriptionTool(_AniRssTool):
                 match=_as_str_list(values.get("match"), "match") or None,
                 exclude=_as_str_list(values.get("exclude"), "exclude") or None,
                 standby_entries=_as_standby_entries(values.get("standby")),
+                override=_as_bool(values.get("override"), "override"),
+                confirmed=_as_bool(values.get("confirm"), "confirm"),
+            )
+            return format_add_result(data, mask_urls=plugin.mask_rss_urls)
+
+        if act == "add_group":
+            data = await plugin.service.subscribe_group(
+                _require_value(values.get("ref"), "ref"),
+                _require_value(values.get("group"), "group"),
+                source=_optional_text(values.get("source")),
+                match=_as_str_list(values.get("match"), "match") or None,
+                exclude=_as_str_list(values.get("exclude"), "exclude") or None,
+                enable=(
+                    _as_bool(values.get("enable"), "enable")
+                    if values.get("enable") is not None
+                    else None
+                ),
+                title=_optional_text(values.get("title")),
+                season=_as_int(values.get("season"), "season", minimum=1, maximum=99),
+                offset=_as_int(values.get("offset"), "offset"),
                 override=_as_bool(values.get("override"), "override"),
                 confirmed=_as_bool(values.get("confirm"), "confirm"),
             )

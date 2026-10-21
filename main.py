@@ -38,11 +38,14 @@ from .ani_rss_format import (
     format_downloads,
     format_edit_result,
     format_enable_result,
+    format_episode_result,
     format_help,
     format_main_show,
     format_path_result,
     format_refresh_result,
     format_rss_preview,
+    format_search_results,
+    format_source_groups,
     format_standby_change,
     format_standby_list,
     format_status,
@@ -71,6 +74,19 @@ _ADD_OPTIONS = {
 }
 _DELETE_OPTIONS = {"files"}
 _TOTAL_OPTIONS = {"force"}
+_SEARCH_OPTIONS = {"source", "season", "bgm", "limit"}
+_GROUP_OPTIONS = {"source", "limit"}
+_MAGNET_OPTIONS = {"source", "idx"}
+_GROUP_ADD_OPTIONS = {
+    "source",
+    "match",
+    "exclude",
+    "enable",
+    "title",
+    "season",
+    "offset",
+    "override",
+}
 
 # AstrBot 的平台类型名与用户习惯叫法不同，这里兼容常见别名。
 _PLATFORM_ALIASES = {
@@ -84,7 +100,8 @@ class AniRssControlPlugin(Star):
     """通过 AstrBot 控制 ani-rss。
 
     支持订阅列表与详情、主 RSS 与备用 RSS 的增删改、启用停用、刷新、
-    总集数更新、RSS 解析预览、下载路径与下载任务查询。
+    总集数更新、RSS 解析预览、下载路径与下载任务查询，以及片源搜索、
+    字幕组订阅和单集磁力查询。
 
     使用 /ani help 查看完整指令。
     """
@@ -114,6 +131,7 @@ class AniRssControlPlugin(Star):
         self.default_rss_type = self._cfg_str("default_rss_type", "mikan")
         self.allow_delete_files = self._cfg_bool("allow_delete_files", False)
         self.page_size = self._cfg_int("page_size", 10, minimum=1, maximum=50)
+        self.search_limit = self._cfg_int("search_limit", 10, minimum=1, maximum=50)
         self.max_message_chars = self._cfg_int(
             "max_message_chars",
             1500,
@@ -140,6 +158,7 @@ class AniRssControlPlugin(Star):
             self.client,
             allow_delete_files=self.allow_delete_files,
             page_size=self.page_size,
+            search_limit=self.search_limit,
             default_rss_type=self.default_rss_type,
             logger=logger,
         )
@@ -376,6 +395,74 @@ class AniRssControlPlugin(Star):
             "downloads",
             lambda: self._do_downloads(args),
             format_downloads,
+        ):
+            yield result
+
+    # ------------------------------------------------------------------
+    # 片源搜索
+    # ------------------------------------------------------------------
+    @ani_group.command("search", alias={"搜索"})
+    async def ani_search(
+        self, event: AstrMessageEvent, args: GreedyStr
+    ) -> AsyncGenerator[Any, None]:
+        """搜索 Mikan、AniBT 或 AnimeGarden 番剧。"""
+
+        async for result in self._execute(
+            event,
+            "search",
+            lambda: self._do_search(args),
+            format_search_results,
+        ):
+            yield result
+
+    @ani_group.command("groups", alias={"组", "字幕组"})
+    async def ani_groups(
+        self, event: AstrMessageEvent, args: GreedyStr
+    ) -> AsyncGenerator[Any, None]:
+        """查看片源的字幕组与剧集。"""
+
+        async for result in self._execute(
+            event,
+            "groups",
+            lambda: self._do_groups(args),
+            lambda data: format_source_groups(
+                data,
+                mask_urls=self.mask_rss_urls,
+            ),
+        ):
+            yield result
+
+    @ani_group.command("magnet", alias={"磁力"})
+    async def ani_magnet(
+        self, event: AstrMessageEvent, args: GreedyStr
+    ) -> AsyncGenerator[Any, None]:
+        """查询某字幕组某集的磁力链。"""
+
+        async for result in self._execute(
+            event,
+            "magnet",
+            lambda: self._do_magnet(args),
+            lambda data: format_episode_result(
+                data,
+                mask_urls=self.mask_rss_urls,
+            ),
+        ):
+            yield result
+
+    @ani_group.command("sub", alias={"订阅"})
+    async def ani_sub(
+        self, event: AstrMessageEvent, args: GreedyStr
+    ) -> AsyncGenerator[Any, None]:
+        """订阅指定字幕组。"""
+
+        async for result in self._execute(
+            event,
+            "add",
+            lambda: self._do_sub(args),
+            lambda data: format_add_result(
+                data,
+                mask_urls=self.mask_rss_urls,
+            ),
         ):
             yield result
 
@@ -696,6 +783,73 @@ class AniRssControlPlugin(Star):
         limit = parsed.int("limit", 10, minimum=1, maximum=50) or 10
         return await self.service.list_downloads(keyword, limit)
 
+    async def _do_search(self, raw: str) -> dict[str, Any]:
+        parsed = parse_args(raw, allowed_options=_SEARCH_OPTIONS)
+        keyword = join_keyword(parsed.positionals)
+        return await self.service.search_source(
+            keyword,
+            source=parsed.get("source"),
+            season=parsed.get("season"),
+            bgm_url=parsed.get("bgm"),
+            limit=parsed.int("limit", minimum=1, maximum=50),
+        )
+
+    async def _do_groups(self, raw: str) -> dict[str, Any]:
+        parsed = parse_args(raw, allowed_options=_GROUP_OPTIONS)
+        _require_positionals(parsed, 1, "/ani groups <ref> [limit=3]")
+        return await self.service.source_groups(
+            parsed.positionals[0],
+            source=parsed.get("source"),
+            limit=parsed.int("limit", minimum=1, maximum=10),
+        )
+
+    async def _do_magnet(self, raw: str) -> dict[str, Any]:
+        parsed = parse_args(raw, allowed_options=_MAGNET_OPTIONS)
+        _require_at_least(
+            parsed,
+            2,
+            "/ani magnet <ref> <组> <集数> 或 /ani magnet <ref> <组> idx=<序号>",
+        )
+        index = parsed.int("idx", minimum=1)
+        episode: float | None = None
+        if index is None:
+            _require_at_least(
+                parsed,
+                3,
+                "/ani magnet <ref> <组> <集数> 或 /ani magnet <ref> <组> idx=<序号>",
+            )
+            episode = _parse_episode(parsed.positionals[2])
+        elif len(parsed.positionals) > 2:
+            raise AniRssValidationError("集数与 idx 只能指定一个。")
+        return await self.service.source_episode(
+            parsed.positionals[0],
+            parsed.positionals[1],
+            source=parsed.get("source"),
+            episode=episode,
+            index=index,
+        )
+
+    async def _do_sub(self, raw: str) -> dict[str, Any]:
+        parsed = parse_args(
+            raw,
+            allowed_options=_GROUP_ADD_OPTIONS,
+            allowed_flags={"override", "confirm"},
+        )
+        _require_at_least(parsed, 2, "/ani sub <ref> <组> [参数]")
+        return await self.service.subscribe_group(
+            parsed.positionals[0],
+            parsed.positionals[1],
+            source=parsed.get("source"),
+            match=_optional_list(parsed, "match"),
+            exclude=_optional_list(parsed, "exclude"),
+            enable=parsed.bool("enable"),
+            title=parsed.get("title"),
+            season=parsed.int("season", minimum=1, maximum=99),
+            offset=parsed.int("offset"),
+            override=bool(parsed.bool("override", False)),
+            confirmed=parsed.has_flag("confirm"),
+        )
+
     async def _do_main_show(self, raw: str) -> dict[str, Any]:
         parsed = parse_args(raw)
         if not parsed.positionals:
@@ -966,6 +1120,11 @@ class AniRssControlPlugin(Star):
                     "\n接口不存在：请检查 base_url（含反向代理子路径）是否正确，"
                     "以及 ani-rss 版本是否兼容。"
                 )
+                if operation in {"search", "groups", "magnet"}:
+                    message += (
+                        "\n当前 ani-rss 版本可能不支持片源搜索接口，"
+                        "请升级到包含 Mikan/AniBT/AnimeGarden 搜索的 3.x 版本。"
+                    )
             if _looks_like_upstream_npe(str(exc)):
                 message += (
                     "\n这通常表示 ani-rss 中存在缺少 title 或 season 字段的订阅。"
@@ -1115,6 +1274,17 @@ def _optional_list(parsed: ParsedArgs, key: str) -> list[str] | None:
     if value is None:
         return None
     return parse_list(value)
+
+
+def _parse_episode(raw: str) -> float:
+    text = str(raw or "").strip()
+    try:
+        value = float(text)
+    except (TypeError, ValueError) as exc:
+        raise AniRssValidationError("集数必须是数字，例如 5 或 12.5。") from exc
+    if value <= 0:
+        raise AniRssValidationError("集数必须大于 0。")
+    return value
 
 
 def _render_delete(data: dict[str, Any]) -> str:

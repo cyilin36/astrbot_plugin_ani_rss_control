@@ -21,6 +21,22 @@ from .ani_rss_errors import (
     AniRssError,
     AniRssValidationError,
 )
+from .ani_rss_sources import (
+    SOURCE_ANIBT,
+    SOURCE_ANIME_GARDEN,
+    SOURCE_MIKAN,
+    default_search_source,
+    filter_search_items,
+    make_ref,
+    normalize_groups,
+    normalize_search,
+    normalize_source,
+    parse_mikan_season,
+    parse_ref,
+    select_episode_items,
+    select_group,
+    source_label,
+)
 
 RSS_TYPES = {"mikan", "ani-bt", "anime-garden", "other"}
 
@@ -60,16 +76,19 @@ class AniRssService:
         *,
         allow_delete_files: bool = False,
         page_size: int = 10,
+        search_limit: int = 10,
         default_rss_type: str = "mikan",
         logger: Any | None = None,
     ) -> None:
         self.client = client
         self.allow_delete_files = bool(allow_delete_files)
         self.page_size = max(1, min(50, int(page_size)))
+        self.search_limit = max(1, min(50, int(search_limit)))
         normalized_type = str(default_rss_type or "mikan").strip().lower()
         self.default_rss_type = (
             normalized_type if normalized_type in RSS_TYPES else "mikan"
         )
+        self.default_search_source = default_search_source(self.default_rss_type)
         self._logger = logger
         self._lock = asyncio.Lock()
 
@@ -574,6 +593,179 @@ class AniRssService:
                 "ani": updated,
                 "moved": True,
             }
+
+    # ------------------------------------------------------------------
+    # 片源搜索与字幕组
+    # ------------------------------------------------------------------
+    async def search_source(
+        self,
+        keyword: str = "",
+        *,
+        source: str | None = None,
+        season: str | None = None,
+        bgm_url: str | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """搜索片源，返回统一格式的番剧列表。"""
+
+        keyword = (keyword or "").strip()
+        season_text = str(season or "").strip()
+        bgm = str(bgm_url or "").strip()
+        source_name = normalize_source(source, self.default_search_source)
+
+        if source_name == SOURCE_MIKAN:
+            season_obj = parse_mikan_season(season_text)
+            raw = await self.client.search_mikan(keyword, season_obj)
+        elif source_name == SOURCE_ANIBT:
+            raw = await self.client.search_anibt(
+                title=keyword,
+                season=season_text,
+                bgm_url=bgm,
+            )
+        elif source_name == SOURCE_ANIME_GARDEN:
+            raw = await self.client.anime_garden_list(bgm)
+        else:
+            raise AniRssValidationError(f"不支持的来源：{source_name}。")
+
+        items = normalize_search(source_name, raw)
+        local_filter = bool(keyword) and source_name == SOURCE_ANIME_GARDEN
+        if local_filter:
+            items = filter_search_items(items, keyword)
+
+        cap = self._search_cap(limit)
+        return {
+            "source": source_name,
+            "source_label": source_label(source_name),
+            "keyword": keyword,
+            "season": season_text,
+            "bgm_url": bgm,
+            "items": items[:cap],
+            "total": len(items),
+            "limit": cap,
+            "local_filter": local_filter,
+        }
+
+    async def source_groups(
+        self,
+        ref: str,
+        *,
+        source: str | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """根据片源引用获取字幕组与剧集。"""
+
+        default_source = normalize_source(source, self.default_search_source)
+        source_name, target = parse_ref(ref, default_source)
+        if source_name == SOURCE_MIKAN:
+            raw = await self.client.mikan_groups(target)
+        elif source_name == SOURCE_ANIBT:
+            raw = await self.client.anibt_groups(target)
+        elif source_name == SOURCE_ANIME_GARDEN:
+            raw = await self.client.anime_garden_groups(target)
+        else:
+            raise AniRssValidationError(f"不支持的来源：{source_name}。")
+
+        groups = normalize_groups(source_name, raw, target)
+        return {
+            "source": source_name,
+            "source_label": source_label(source_name),
+            "ref": make_ref(source_name, target),
+            "target": target,
+            "groups": groups,
+            "total": len(groups),
+            "limit": self._group_preview_limit(limit),
+        }
+
+    async def source_episode(
+        self,
+        ref: str,
+        group: str,
+        *,
+        source: str | None = None,
+        episode: float | None = None,
+        index: int | None = None,
+    ) -> dict[str, Any]:
+        """查询某字幕组某一集的磁力与种子链接。"""
+
+        data = await self.source_groups(ref, source=source)
+        selected = select_group(data["groups"], group)
+        items = select_episode_items(
+            selected["items"],
+            episode=episode,
+            index=index,
+        )
+        return {
+            "source": data["source"],
+            "source_label": data["source_label"],
+            "ref": data["ref"],
+            "group": selected,
+            "items": items,
+        }
+
+    async def subscribe_group(
+        self,
+        ref: str,
+        group: str,
+        *,
+        source: str | None = None,
+        match: list[str] | None = None,
+        exclude: list[str] | None = None,
+        enable: bool | None = None,
+        title: str | None = None,
+        season: int | None = None,
+        offset: int | None = None,
+        override: bool = False,
+        confirmed: bool = False,
+    ) -> dict[str, Any]:
+        """订阅指定字幕组，复用现有 RSS 解析与添加流程。"""
+
+        data = await self.source_groups(ref, source=source)
+        selected = select_group(data["groups"], group)
+        url = str(selected.get("rss") or "").strip()
+        if not url:
+            raise AniRssValidationError(
+                f"字幕组「{selected.get('label')}」缺少 RSS 地址，无法订阅。",
+            )
+
+        source_name = data["source"]
+        subgroup = str(selected.get("label") or "").strip() or None
+        bgm_url: str | None = None
+        if source_name == SOURCE_MIKAN:
+            bgm_url = str(selected.get("bgm_url") or "").strip() or None
+            # ani-rss 对 mikan 类型单独传 subgroup 时要求同时提供 bgmUrl。
+            if bgm_url is None:
+                subgroup = None
+
+        result = await self.add_subscription(
+            url=url,
+            rss_type=source_name,
+            bgm_url=bgm_url,
+            subgroup=subgroup,
+            title=title,
+            season=season,
+            offset=offset,
+            enable=enable,
+            match=match,
+            exclude=exclude,
+            override=override,
+            confirmed=confirmed,
+        )
+        return {
+            **result,
+            "source": source_name,
+            "source_label": data["source_label"],
+            "ref": data["ref"],
+            "group": selected,
+            "subgroup": subgroup,
+        }
+
+    def _search_cap(self, limit: int | None) -> int:
+        value = self.search_limit if limit is None else int(limit)
+        return max(1, min(50, value))
+
+    def _group_preview_limit(self, limit: int | None) -> int:
+        value = 3 if limit is None else int(limit)
+        return max(1, min(10, value))
 
     # ------------------------------------------------------------------
     # 下载与状态

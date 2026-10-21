@@ -41,10 +41,10 @@
     "hint": "允许范围 1 到 120。"
   },
   "rss_timeout": {
-    "description": "RSS 解析超时秒数",
+    "description": "RSS 解析与片源搜索超时秒数",
     "type": "int",
     "default": 60,
-    "hint": "rssToAni 需要抓取 RSS 与 BGM 信息，允许范围 5 到 300。"
+    "hint": "rssToAni 与 Mikan/AniBT/AnimeGarden 搜索需要访问外部站点，允许范围 5 到 300。"
   },
   "verify_tls": {
     "description": "校验 TLS 证书",
@@ -78,6 +78,12 @@
     "type": "int",
     "default": 10,
     "hint": "允许范围 1 到 50。"
+  },
+  "search_limit": {
+    "description": "片源搜索结果条数上限",
+    "type": "int",
+    "default": 10,
+    "hint": "允许范围 1 到 50；单个指令可用 limit= 覆盖。字幕组剧集预览默认 3 条，也可用 limit= 调整。"
   },
   "max_message_chars": {
     "description": "单条消息最大字符数",

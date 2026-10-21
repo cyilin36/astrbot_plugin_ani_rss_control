@@ -90,6 +90,13 @@ def format_help(version: str) -> str:
   /ani edit <订阅> [字段=值 ...] [move=true]
   /ani delete <订阅...> [files=true] [确认]
 
+片源
+  /ani search [关键词] [source=mikan|ani-bt|anime-garden] [season=2026春] [bgm=] [limit=10]
+  /ani groups <ref> [limit=3]
+  /ani magnet <ref> <组> <集数>
+  /ani magnet <ref> <组> idx=<条目序号>
+  /ani sub <ref> <组> [match=] [exclude=] [enable=] [title=] [season=] [offset=] [override=true 确认]
+
 主 RSS
   /ani main add <RSS> [同上]
   /ani main show <订阅>
@@ -122,6 +129,9 @@ match/exclude 用 | 分隔；规则本身含竖线时可用 JSON 数组，例如
 编辑标题、季或下载路径时，ani-rss 默认不会移动已下载视频；需要移动请追加 move=true。
 download_path 仅在同时设置 custom_download_path=true 时生效。
 编辑可用字段：{_EDITABLE_FIELDS_TEXT}。
+片源搜索返回的 ref 形如 mikan:https://...、ani-bt:123、anime-garden:123；后续 groups/sub/magnet 直接使用该 ref。
+ref 也可只写标识并用 source= 指定来源，例如 /ani groups 12345 source=ani-bt。
+搜索季节格式为“2026春”；sub 的 season 参数仍是订阅的季数。
 AI 工具：AstrBot 中的 AI 可调用 ani_rss_query、ani_rss_subscription、ani_rss_standby（需模型支持 function calling）。"""
 
 
@@ -420,6 +430,150 @@ def format_downloads(data: dict[str, Any]) -> str:
     for index, item in enumerate(items, start=1):
         lines.append(_format_download_line(item, index))
     return "\n".join(lines)
+
+
+def format_search_results(data: dict[str, Any]) -> str:
+    """格式化片源搜索结果。"""
+
+    label = str(data.get("source_label") or data.get("source") or "片源")
+    items = list(data.get("items") or [])
+    total = int(data.get("total") or 0)
+    keyword = str(data.get("keyword") or "").strip()
+    season = str(data.get("season") or "").strip()
+    bgm_url = str(data.get("bgm_url") or "").strip()
+
+    if not items:
+        if keyword:
+            return f"{label} 未找到匹配「{keyword}」的番剧。"
+        if season:
+            return f"{label} 未找到 {season} 的番剧。"
+        return f"{label} 未找到番剧。"
+
+    lines = [f"{label} 搜索结果（共 {total} 项，显示 {len(items)} 项）"]
+    if keyword:
+        lines.append(f"关键词：{keyword}")
+    if season:
+        lines.append(f"季度：{season}")
+    if bgm_url:
+        lines.append(f"BGM：{bgm_url}")
+    if data.get("local_filter"):
+        lines.append("AnimeGarden 不支持关键词搜索，以上为本地筛选结果。")
+    lines.append("")
+
+    for index, item in enumerate(items, start=1):
+        title = str(item.get("title") or "未命名番剧")
+        tags = _search_tags(item)
+        suffix = f" [{'，'.join(tags)}]" if tags else ""
+        lines.append(f"{index}. {title}{suffix}")
+        lines.append(f"   ref：{item.get('ref') or ''}")
+
+    lines.append("")
+    lines.append("用 /ani groups <ref> 查看字幕组，用 /ani sub <ref> <组序号> 订阅。")
+    return "\n".join(lines)
+
+
+def format_source_groups(data: dict[str, Any], *, mask_urls: bool = False) -> str:
+    """格式化字幕组与剧集列表。"""
+
+    label = str(data.get("source_label") or data.get("source") or "片源")
+    ref = str(data.get("ref") or "")
+    groups = list(data.get("groups") or [])
+    limit = int(data.get("limit") or 3)
+
+    if not groups:
+        return f"{label} 未找到字幕组（ref：{ref}）。"
+
+    lines = [
+        f"{label} 字幕组（共 {len(groups)} 组，每组显示前 {limit} 集）",
+        f"ref：{ref}",
+        "",
+    ]
+    for group in groups:
+        index = group.get("index")
+        name = str(group.get("label") or "未知字幕组")
+        update_day = str(group.get("update_day") or "").strip()
+        day_text = f"（{update_day}更新）" if update_day else ""
+        lines.append(f"{index}. {name}{day_text}")
+        rss = _mask_url(str(group.get("rss") or ""), mask_urls)
+        if rss:
+            lines.append(f"   RSS：{rss}")
+        items = list(group.get("items") or [])
+        if not items:
+            lines.append("   暂无剧集。")
+            continue
+        for item in items[:limit]:
+            lines.append(f"   {_format_source_item(item)}")
+
+    lines.append("")
+    lines.append(
+        "用 /ani sub <ref> <组序号> 订阅；"
+        "用 /ani magnet <ref> <组序号> <集数> 取磁力。",
+    )
+    return "\n".join(lines)
+
+
+def format_episode_result(data: dict[str, Any], *, mask_urls: bool = False) -> str:
+    """格式化单集磁力与种子链接。"""
+
+    label = str(data.get("source_label") or data.get("source") or "片源")
+    group = data.get("group") or {}
+    items = list(data.get("items") or [])
+    group_name = str(group.get("label") or "未知字幕组")
+
+    if not items:
+        return f"{label} / {group_name}：未找到对应剧集。"
+
+    lines = [f"{label} / {group_name}（{len(items)} 条）"]
+    for index, item in enumerate(items, start=1):
+        title = str(item.get("title") or "未命名剧集")
+        episode = _episode_label(item.get("episode"))
+        lines.append(f"{index}. {episode} {title}")
+        magnet = str(item.get("magnet") or "").strip()
+        torrent = _mask_url(str(item.get("torrent") or ""), mask_urls)
+        if magnet:
+            lines.append(f"   磁力：{magnet}")
+        if torrent:
+            lines.append(f"   种子：{torrent}")
+        if not magnet and not torrent:
+            lines.append("   该条目没有磁力或种子链接。")
+        elif not magnet:
+            lines.append("   该条目未提供磁力链接，可使用上方种子链接。")
+        size = str(item.get("size") or "").strip()
+        if size:
+            lines.append(f"   大小：{size}")
+    return "\n".join(lines)
+
+
+def _format_source_item(item: dict[str, Any]) -> str:
+    index = item.get("index")
+    episode = _episode_label(item.get("episode"))
+    title = str(item.get("title") or "未命名剧集")
+    return f"{index}. {episode} {title}"
+
+
+def _search_tags(item: dict[str, Any]) -> list[str]:
+    tags: list[str] = []
+    score = item.get("score")
+    if isinstance(score, (int, float)) and not isinstance(score, bool) and score > 0:
+        tags.append(f"评分 {score:g}")
+    subtitle = str(item.get("subtitle") or "").strip()
+    if subtitle:
+        tags.append(subtitle)
+    if item.get("exists") is True:
+        tags.append("已订阅")
+    return tags
+
+
+def _episode_label(value: Any) -> str:
+    if isinstance(value, bool) or value is None:
+        return "集数未知"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "集数未知"
+    if number.is_integer():
+        return f"第{int(number)}集"
+    return f"第{number:g}集"
 
 
 def format_status(data: dict[str, Any]) -> str:
