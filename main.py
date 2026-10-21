@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Awaitable, Callable
+import inspect
+import re
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
 from typing import Any
 
 from astrbot.api import AstrBotConfig, logger
@@ -67,6 +69,13 @@ _ADD_OPTIONS = {
 }
 _DELETE_OPTIONS = {"files"}
 _TOTAL_OPTIONS = {"force"}
+
+# AstrBot 的平台类型名与用户习惯叫法不同，这里兼容常见别名。
+_PLATFORM_ALIASES = {
+    "aiocqhttp": ("qq", "onebot"),
+    "qq_official": ("qq",),
+    "lark": ("feishu",),
+}
 
 
 class AniRssControlPlugin(Star):
@@ -145,8 +154,23 @@ class AniRssControlPlugin(Star):
     # 指令组
     # ------------------------------------------------------------------
     @filter.command_group("ani", alias={"anirss", "ar"})
-    def ani_group(self) -> None:
-        """ani-rss 控制指令。"""
+    async def ani_group(
+        self,
+        event: AstrMessageEvent,
+    ) -> AsyncGenerator[Any, None]:
+        """ani-rss 控制指令。
+
+        AstrBot 的消息管线只会把指令组当作过滤器使用，不会调用本函数；
+        但部分插件（例如 llm_executor）会直接调用已注册的指令组处理器。
+        因此这里接受 event，并在被直接调用时把请求转交给对应子指令。
+        """
+
+        async for result in self._dispatch_group(
+            event,
+            self.ani_group.parent_group,
+            format_help(PLUGIN_VERSION),
+        ):
+            yield result
 
     @ani_group.command("help", alias={"帮助"})
     async def ani_help(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
@@ -354,8 +378,18 @@ class AniRssControlPlugin(Star):
     # 主 RSS
     # ------------------------------------------------------------------
     @ani_group.group("main", alias={"主"})
-    def ani_main_group(self) -> None:
+    async def ani_main_group(
+        self,
+        event: AstrMessageEvent,
+    ) -> AsyncGenerator[Any, None]:
         """主 RSS 操作。"""
+
+        async for result in self._dispatch_group(
+            event,
+            self.ani_main_group.parent_group,
+            format_help(PLUGIN_VERSION),
+        ):
+            yield result
 
     @ani_main_group.command("add")
     async def ani_main_add(
@@ -426,8 +460,18 @@ class AniRssControlPlugin(Star):
     # 备用 RSS
     # ------------------------------------------------------------------
     @ani_group.group("standby", alias={"备"})
-    def ani_standby_group(self) -> None:
+    async def ani_standby_group(
+        self,
+        event: AstrMessageEvent,
+    ) -> AsyncGenerator[Any, None]:
         """备用 RSS 操作。"""
+
+        async for result in self._dispatch_group(
+            event,
+            self.ani_standby_group.parent_group,
+            format_help(PLUGIN_VERSION),
+        ):
+            yield result
 
     @ani_standby_group.command("list", alias={"ls"})
     async def ani_standby_list(
@@ -526,8 +570,9 @@ class AniRssControlPlugin(Star):
 
     async def _do_info(self, raw: str) -> dict[str, Any]:
         parsed = parse_args(raw)
-        _require_positionals(parsed, 1, "/ani info <订阅>")
-        return await self.service.get_subscription(parsed.positionals[0])
+        if not parsed.positionals:
+            raise AniRssValidationError("用法：/ani info <订阅>")
+        return await self.service.get_subscription(_selector_text(parsed))
 
     async def _do_add(self, raw: str) -> dict[str, Any]:
         parsed = parse_args(
@@ -553,16 +598,24 @@ class AniRssControlPlugin(Star):
         )
 
     async def _do_edit(self, raw: str) -> dict[str, Any]:
-        parsed = parse_args(raw, allowed_options=EDITABLE_FIELDS)
-        _require_positionals(parsed, 1, "/ani edit <订阅> [字段=值 ...]")
+        parsed = parse_args(
+            raw,
+            allowed_options=EDITABLE_FIELDS,
+            allowed_flags={"move"},
+        )
+        if not parsed.positionals:
+            raise AniRssValidationError(
+                "用法：/ani edit <订阅> [字段=值 ...] [move=true]",
+            )
         changes = {
             field: value
             for field in EDITABLE_FIELDS
             if (value := parsed.get(field)) is not None
         }
         return await self.service.edit_subscription(
-            parsed.positionals[0],
+            _selector_text(parsed),
             changes,
+            move=bool(parsed.bool("move", False)),
         )
 
     async def _do_delete(self, raw: str) -> dict[str, Any]:
@@ -628,8 +681,9 @@ class AniRssControlPlugin(Star):
 
     async def _do_path(self, raw: str) -> dict[str, Any]:
         parsed = parse_args(raw)
-        _require_positionals(parsed, 1, "/ani path <订阅>")
-        return await self.service.get_download_path(parsed.positionals[0])
+        if not parsed.positionals:
+            raise AniRssValidationError("用法：/ani path <订阅>")
+        return await self.service.get_download_path(_selector_text(parsed))
 
     async def _do_downloads(self, raw: str) -> dict[str, Any]:
         parsed = parse_args(raw, allowed_options={"limit"})
@@ -639,32 +693,38 @@ class AniRssControlPlugin(Star):
 
     async def _do_main_show(self, raw: str) -> dict[str, Any]:
         parsed = parse_args(raw)
-        _require_positionals(parsed, 1, "/ani main show <订阅>")
-        return await self.service.main_show(parsed.positionals[0])
+        if not parsed.positionals:
+            raise AniRssValidationError("用法：/ani main show <订阅>")
+        return await self.service.main_show(_selector_text(parsed))
 
     async def _do_main_set(self, raw: str) -> dict[str, Any]:
         parsed = parse_args(raw)
-        _require_positionals(parsed, 2, "/ani main set <订阅> <RSS地址>")
+        _require_at_least(
+            parsed,
+            2,
+            "/ani main set <订阅> <RSS地址>",
+        )
         return await self.service.set_main_rss(
-            parsed.positionals[0],
-            parsed.positionals[1],
+            _selector_text(parsed, drop_last=1),
+            parsed.positionals[-1],
         )
 
     async def _do_standby_list(self, raw: str) -> dict[str, Any]:
         parsed = parse_args(raw)
-        _require_positionals(parsed, 1, "/ani standby list <订阅>")
-        return await self.service.standby_list(parsed.positionals[0])
+        if not parsed.positionals:
+            raise AniRssValidationError("用法：/ani standby list <订阅>")
+        return await self.service.standby_list(_selector_text(parsed))
 
     async def _do_standby_add(self, raw: str) -> dict[str, Any]:
         parsed = parse_args(raw, allowed_options={"label", "offset"})
-        _require_positionals(
+        _require_at_least(
             parsed,
             2,
             "/ani standby add <订阅> <RSS地址> [label=] [offset=]",
         )
         return await self.service.standby_add(
-            parsed.positionals[0],
-            parsed.positionals[1],
+            _selector_text(parsed, drop_last=1),
+            parsed.positionals[-1],
             label=parsed.get("label"),
             offset=parsed.int("offset"),
         )
@@ -674,7 +734,7 @@ class AniRssControlPlugin(Star):
             raw,
             allowed_options={"url", "label", "offset"},
         )
-        _require_positionals(
+        _require_at_least(
             parsed,
             2,
             "/ani standby set <订阅> <序号|标签> [url=] [label=] [offset=]",
@@ -684,8 +744,8 @@ class AniRssControlPlugin(Star):
                 "请至少提供 url、label 或 offset 中的一项。",
             )
         return await self.service.standby_set(
-            parsed.positionals[0],
-            parsed.positionals[1],
+            _selector_text(parsed, drop_last=1),
+            parsed.positionals[-1],
             url=parsed.get("url"),
             label=parsed.get("label"),
             offset=parsed.int("offset"),
@@ -693,32 +753,96 @@ class AniRssControlPlugin(Star):
 
     async def _do_standby_delete(self, raw: str) -> dict[str, Any]:
         parsed = parse_args(raw)
-        _require_positionals(
+        _require_at_least(
             parsed,
             2,
             "/ani standby delete <订阅> <序号|标签>",
         )
         return await self.service.standby_delete(
-            parsed.positionals[0],
-            parsed.positionals[1],
+            _selector_text(parsed, drop_last=1),
+            parsed.positionals[-1],
         )
 
     async def _do_standby_move(self, raw: str) -> dict[str, Any]:
-        parsed = parse_args(raw)
-        _require_positionals(
-            parsed,
-            3,
-            "/ani standby move <订阅> <序号|标签> <up|down|to=N>",
-        )
+        parsed = parse_args(raw, allowed_options={"to"})
+        to_value = parsed.get("to")
+        if to_value is not None:
+            _require_at_least(
+                parsed,
+                2,
+                "/ani standby move <订阅> <序号|标签> to=N",
+            )
+            direction = f"to={to_value}"
+            selector = _selector_text(parsed, drop_last=1)
+            target = parsed.positionals[-1]
+        else:
+            _require_at_least(
+                parsed,
+                3,
+                "/ani standby move <订阅> <序号|标签> <up|down>",
+            )
+            direction = parsed.positionals[-1]
+            selector = _selector_text(parsed, drop_last=2)
+            target = parsed.positionals[-2]
         return await self.service.standby_move(
-            parsed.positionals[0],
-            parsed.positionals[1],
-            parsed.positionals[2],
+            selector,
+            target,
+            direction,
         )
 
     # ------------------------------------------------------------------
     # 通用处理
     # ------------------------------------------------------------------
+    async def _dispatch_group(
+        self,
+        event: AstrMessageEvent,
+        group_filter: Any,
+        help_text: str,
+    ) -> AsyncGenerator[Any, None]:
+        """把直接调用指令组处理器的请求转交给对应子指令。
+
+        AstrBot 正常消息管线不会调用指令组函数；这里仅为兼容会直接调用
+        注册处理器的第三方插件（例如 llm_executor）。无法匹配子指令时
+        返回帮助文本，避免出现空回复。
+        """
+
+        text = _normalize_command_text(event.get_message_str())
+        matched = _match_group_command(group_filter, text)
+        if matched is None:
+            for chunk in chunk_text(help_text, self.max_message_chars):
+                yield event.plain_result(chunk)
+            return
+
+        name, command_filter = matched
+        remainder = text[len(name) :].strip()
+        handler_params = getattr(command_filter, "handler_params", None) or {}
+        try:
+            params = (
+                command_filter.validate_and_convert_params(
+                    [part for part in remainder.split(" ") if part],
+                    handler_params,
+                )
+                if handler_params
+                else {}
+            )
+        except ValueError as exc:
+            yield event.plain_result(f"参数错误：{exc}")
+            return
+
+        handler_md = getattr(command_filter, "handler_md", None)
+        handler = getattr(handler_md, "handler", None)
+        if not callable(handler):
+            for chunk in chunk_text(help_text, self.max_message_chars):
+                yield event.plain_result(chunk)
+            return
+
+        result = handler(event, **params)
+        if inspect.isasyncgen(result):
+            async for item in result:
+                yield item
+        elif inspect.isawaitable(result):
+            await result
+
     async def _execute(
         self,
         event: AstrMessageEvent,
@@ -736,7 +860,7 @@ class AniRssControlPlugin(Star):
             text = render(data)
         except AniRssError as exc:
             logger.warning("ani-rss %s 失败：%s", operation, exc)
-            yield event.plain_result(self._error_text(exc))
+            yield event.plain_result(self._error_text(exc, operation))
             return
         except Exception:
             logger.exception("ani-rss %s 发生未预期异常", operation)
@@ -768,12 +892,16 @@ class AniRssControlPlugin(Star):
             platform = str(get_platform_name() or "").strip().lower()
             if platform:
                 candidates.add(f"{platform}:{sender_id}")
+                candidates.update(
+                    f"{alias}:{sender_id}"
+                    for alias in _PLATFORM_ALIASES.get(platform, ())
+                )
 
         if candidates & self.authorized_uids:
             return None
         return "无权限：仅 AstrBot 管理员或配置 authorized_uids 中的用户可使用。"
 
-    def _error_text(self, exc: AniRssError) -> str:
+    def _error_text(self, exc: AniRssError, operation: str = "") -> str:
         if isinstance(exc, AniRssConfigError):
             return f"配置错误：{exc}"
         if isinstance(exc, AniRssValidationError):
@@ -781,9 +909,14 @@ class AniRssControlPlugin(Star):
         if isinstance(exc, AniRssAuthError):
             return f"ani-rss 鉴权失败：{exc}\n请检查 api_key、token 或账号密码配置。"
         if isinstance(exc, AniRssDuplicateError):
+            if operation in {"add", "main add"}:
+                return (
+                    f"ani-rss 返回错误：{exc}\n"
+                    "如需覆盖已有订阅，请追加 override=true 确认。"
+                )
             return (
                 f"ani-rss 返回错误：{exc}\n"
-                "如需覆盖已有订阅，请追加 override=true 确认。"
+                "该订阅与已有订阅的标题和季重复，请修改标题或季。"
             )
         if isinstance(exc, AniRssConnectionError):
             return (
@@ -792,7 +925,15 @@ class AniRssControlPlugin(Star):
         if isinstance(exc, AniRssAPIError):
             message = f"ani-rss 返回错误：{exc}"
             if exc.status == 404 or exc.code == 404:
-                message += "\n当前 ani-rss 版本可能不支持该接口。"
+                message += (
+                    "\n接口不存在：请检查 base_url（含反向代理子路径）是否正确，"
+                    "以及 ani-rss 版本是否兼容。"
+                )
+            if _looks_like_upstream_npe(str(exc)):
+                message += (
+                    "\n这通常表示 ani-rss 中存在缺少 title 或 season 字段的订阅。"
+                    "请先删除这些订阅（不要带 files=true），再重新添加。"
+                )
             return message
         return f"ani-rss 操作失败：{exc}"
 
@@ -846,9 +987,82 @@ class AniRssControlPlugin(Star):
         }
 
 
+def _looks_like_upstream_npe(message: str) -> bool:
+    """判断 ani-rss 错误信息是否为空值导致的空指针异常。"""
+
+    normalized = message.lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "cannot invoke",
+            "nullpointerexception",
+            "cannot read the array length",
+            "is null",
+        )
+    )
+
+
+def _normalize_command_text(raw: str) -> str:
+    """规范化可能带唤醒前缀的指令文本。"""
+
+    text = re.sub(r"\s+", " ", str(raw or "").strip())
+    return text.lstrip("/~～!！").strip()
+
+
+def _iter_group_commands(
+    group_filter: Any,
+) -> Iterator[tuple[list[str], Any]]:
+    """递归遍历指令组下的所有子指令过滤器。"""
+
+    for sub_filter in getattr(group_filter, "sub_command_filters", []) or []:
+        if hasattr(sub_filter, "handler_md"):
+            yield list(sub_filter.get_complete_command_names()), sub_filter
+        else:
+            yield from _iter_group_commands(sub_filter)
+
+
+def _match_group_command(
+    group_filter: Any,
+    text: str,
+) -> tuple[str, Any] | None:
+    """按最长指令名匹配子指令。"""
+
+    best_name = ""
+    best_filter = None
+    for names, command_filter in _iter_group_commands(group_filter):
+        for name in names:
+            if len(name) <= len(best_name):
+                continue
+            if text == name or text.startswith(f"{name} "):
+                best_name = name
+                best_filter = command_filter
+    if best_filter is None:
+        return None
+    return best_name, best_filter
+
+
 def _require_positionals(parsed: ParsedArgs, count: int, usage: str) -> None:
     if len(parsed.positionals) != count:
         raise AniRssValidationError(f"用法：{usage}")
+
+
+def _require_at_least(parsed: ParsedArgs, count: int, usage: str) -> None:
+    if len(parsed.positionals) < count:
+        raise AniRssValidationError(f"用法：{usage}")
+
+
+def _selector_text(parsed: ParsedArgs, *, drop_last: int = 0) -> str:
+    """把位置参数合并为订阅选择器，允许标题包含空格。"""
+
+    positionals = (
+        parsed.positionals[: len(parsed.positionals) - drop_last]
+        if drop_last
+        else parsed.positionals
+    )
+    selector = " ".join(positionals).strip()
+    if not selector:
+        raise AniRssValidationError("请指定订阅的 id、id 前缀或标题。")
+    return selector
 
 
 def _optional_list(parsed: ParsedArgs, key: str) -> list[str] | None:

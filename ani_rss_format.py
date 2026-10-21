@@ -51,17 +51,29 @@ _AUTH_MODE_LABELS = {
 }
 
 _STATE_LABELS = {
+    "unknown": "未知",
+    "forcedDL": "强制下载",
     "downloading": "下载中",
-    "seeding": "做种",
-    "stoppedUP": "已停止",
+    "forcedMetaDL": "强制获取元数据",
+    "metaDL": "获取元数据",
+    "stalledDL": "下载停滞",
+    "queuedDL": "下载排队",
+    "checkingDL": "校验中",
+    "checkingResumeData": "校验恢复数据",
     "stoppedDL": "已停止",
-    "queuedUP": "排队",
-    "queuedDL": "排队",
-    "pausedUP": "已暂停",
     "pausedDL": "已暂停",
+    "allocating": "分配空间",
+    "moving": "移动中",
+    "forcedUP": "强制做种",
+    "uploading": "做种中",
+    "stalledUP": "做种停滞",
+    "queuedUP": "做种排队",
+    "checkingUP": "校验中",
+    "stoppedUP": "已停止",
+    "pausedUP": "已暂停",
     "error": "错误",
     "missingFiles": "文件缺失",
-    "unknown": "未知",
+    "seeding": "做种",
 }
 
 
@@ -69,13 +81,13 @@ def format_help(version: str) -> str:
     """生成帮助文本。"""
 
     return f"""ani-rss 控制插件 v{version}
-用法：/ani <子命令> [参数]
+用法：/ani <子命令> [参数]（别名 /anirss、/ar）
 
 订阅
   /ani list [关键词] [page=1] [size=10]
   /ani info <订阅>
   /ani add <RSS> [type=] [bgm=] [subgroup=] [title=] [season=] [offset=] [enable=] [match=] [exclude=] [standby=标签|URL|偏移 ...] [override=true 确认]
-  /ani edit <订阅> [字段=值 ...]
+  /ani edit <订阅> [字段=值 ...] [move=true]
   /ani delete <订阅...> [files=true] [确认]
 
 主 RSS
@@ -103,9 +115,12 @@ def format_help(version: str) -> str:
   /ani help
 
 订阅可用完整 id、唯一 id 前缀或标题指定；标题后可加 #季，例如 葬送的芙莉莲#2。
+单订阅指令的标题含空格时可直接填写；delete、enable、disable、refresh、total 等可指定多个订阅的指令，请为每个标题加引号。
 删除订阅需追加「确认」。删除本地文件还需配置 allow_delete_files=true 并追加 files=true。
 覆盖已有订阅需 override=true 与「确认」。
 match/exclude 用 | 分隔；规则本身含竖线时可用 JSON 数组，例如 match=["a|b"]。
+编辑标题、季或下载路径时，ani-rss 默认不会移动已下载视频；需要移动请追加 move=true。
+download_path 仅在同时设置 custom_download_path=true 时生效。
 编辑可用字段：{_EDITABLE_FIELDS_TEXT}。"""
 
 
@@ -269,6 +284,15 @@ def format_edit_result(data: dict[str, Any], *, mask_urls: bool = False) -> str:
         lines.append(
             f"{label}：{_display_value(old, mask_urls)} -> {_display_value(new, mask_urls)}",
         )
+    if data.get("path_changed") and not data.get("move"):
+        lines.append(
+            "注意：标题、季或下载路径已变化；ani-rss 默认不会移动已下载视频，"
+            "如需移动请追加 move=true 重新执行。",
+        )
+    if "url" in changed:
+        lines.append("提示：主 RSS 已更换，建议执行 /ani refresh 重新抓取元数据。")
+    if "download_path" in changed and not ani.get("customDownloadPath"):
+        lines.append("提示：download_path 仅在 custom_download_path=true 时生效。")
     return "\n".join(lines)
 
 
@@ -280,6 +304,7 @@ def format_delete_preview(data: dict[str, Any]) -> str:
     file_text = "同时删除" if delete_files else "保留"
     lines = [
         f"将删除 {len(items)} 个订阅；本地文件：{file_text}",
+        "ani-rss 会同时删除种子记录，删除在服务端异步执行。",
         "",
     ]
     for ani in items:
@@ -299,7 +324,10 @@ def format_delete_result(data: dict[str, Any]) -> str:
     items = list(data.get("items") or [])
     delete_files = bool(data.get("delete_files"))
     suffix = "本地文件已请求删除" if delete_files else "本地文件已保留"
-    lines = [f"已删除 {len(items)} 个订阅；{suffix}。"]
+    lines = [
+        f"已删除 {len(items)} 个订阅；{suffix}。",
+        "种子记录会在服务端异步删除。",
+    ]
     for ani in items:
         lines.append(f"- {_title(ani)} | ID：{ani.get('id') or '未知'}")
     return "\n".join(lines)
@@ -333,7 +361,12 @@ def format_total_result(data: dict[str, Any]) -> str:
 
     count = int(data.get("count") or 0)
     force = bool(data.get("force"))
-    return f"已提交更新总集数：{count} 个订阅；force={'是' if force else '否'}。"
+    if force:
+        return f"已提交更新总集数：{count} 个订阅；force=是。"
+    return (
+        f"已提交更新总集数：{count} 个订阅；force=否。"
+        "force=否时 ani-rss 仅补全总集数为 0 的订阅；如需强制刷新请加 force=true。"
+    )
 
 
 def format_rss_preview(ani: dict[str, Any], *, mask_urls: bool = False) -> str:
@@ -365,7 +398,6 @@ def format_path_result(data: dict[str, Any]) -> str:
         f"订阅：{_title(ani)}",
         f"ID：{ani.get('id') or '未知'}",
         f"下载路径：{data.get('path') or '未知'}",
-        f"位置会变化：{'是' if data.get('change') else '否'}",
     ]
     return "\n".join(lines)
 
@@ -415,7 +447,13 @@ def format_status(data: dict[str, Any]) -> str:
             update = "可更新" if about.get("update") else "已是最新"
             lines.append(f"最新：{latest}（{update}）")
     elif data.get("about_error"):
-        lines.append(f"版本信息：获取失败（{data.get('about_error')}）")
+        about_error = str(data.get("about_error"))
+        lines.append(f"版本信息：获取失败（{about_error}）")
+        if "鉴权" in about_error or "401" in about_error or "403" in about_error:
+            lines.append(
+                "鉴权：失败。ping 无需鉴权，连接正常仅代表服务可达；"
+                "请检查 api_key、token 或账号密码配置。",
+            )
 
     standby = data.get("standby_rss")
     if standby is True:
@@ -520,11 +558,15 @@ def _standby_entries(ani: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _title(ani: dict[str, Any]) -> str:
-    title = str(ani.get("title") or "（无标题）")
+    raw_title = ani.get("title")
+    if raw_title is None:
+        label = "（标题缺失）"
+    else:
+        label = str(raw_title).strip() or "（标题为空）"
     season = ani.get("season")
     if isinstance(season, int) and not isinstance(season, bool):
-        return f"{title} 第{season}季"
-    return title
+        return f"{label} 第{season}季"
+    return label
 
 
 def _progress(ani: dict[str, Any]) -> str:

@@ -9,7 +9,7 @@ import asyncio
 import copy
 from collections.abc import Iterable, Mapping
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from .ani_rss_args import parse_bool, parse_int, parse_list
 from .ani_rss_client import AniRssClient
@@ -41,6 +41,11 @@ EDITABLE_FIELDS: dict[str, str] = {
     "upload": "upload",
     "message": "message",
 }
+
+# 这些字段变化会影响 ani-rss 计算出的下载路径。
+_PATH_AFFECTING_FIELDS = {"title", "season", "download_path", "custom_download_path"}
+# ani-rss 在写操作中会直接对 title/season 调用 equals，缺失时会抛空指针异常。
+_REQUIRED_METADATA_FIELDS = ("title", "season")
 
 
 class AniRssService:
@@ -142,6 +147,8 @@ class AniRssService:
         if override and not confirmed:
             raise AniRssValidationError("覆盖已有订阅需要追加「确认」。")
 
+        await self._require_writable_metadata()
+
         dto, entries = self._build_rss_dto(
             url=url,
             rss_type=rss_type,
@@ -206,8 +213,14 @@ class AniRssService:
         self,
         selector: str,
         changes: Mapping[str, str],
+        *,
+        move: bool = False,
     ) -> dict[str, Any]:
-        """修改订阅字段。传入的是指令原始字符串。"""
+        """修改订阅字段。传入的是指令原始字符串。
+
+        ``move`` 为 true 时要求 ani-rss 同时移动已下载的视频文件；该参数
+        只在标题、季或下载路径发生变化时才有意义。
+        """
 
         selected = {
             field: raw for field, raw in changes.items() if field in EDITABLE_FIELDS
@@ -225,6 +238,7 @@ class AniRssService:
         async with self._lock:
             items, _ = await self.list_subscriptions()
             target = _resolve_subscription(selector, items)
+            _ensure_writable_metadata(_other_items(items, target))
             before = copy.deepcopy(target)
             updated = copy.deepcopy(target)
             changed: dict[str, tuple[Any, Any]] = {}
@@ -238,11 +252,22 @@ class AniRssService:
                 changed[field] = (before.get(key), value)
 
             if not changed:
-                return {"ani": before, "changed": {}}
+                return {
+                    "ani": before,
+                    "changed": {},
+                    "move": move,
+                    "path_changed": False,
+                }
 
             _validate_ani_urls(updated)
-            await self.client.set_ani(updated)
-            return {"ani": updated, "changed": changed}
+            path_changed = any(field in _PATH_AFFECTING_FIELDS for field in changed)
+            await self.client.set_ani(updated, move=move)
+            return {
+                "ani": updated,
+                "changed": changed,
+                "move": move,
+                "path_changed": path_changed,
+            }
 
     async def set_main_rss(self, selector: str, url: str) -> dict[str, Any]:
         """修改主 RSS。"""
@@ -292,6 +317,8 @@ class AniRssService:
                     "delete_files": delete_files,
                 }
 
+            if delete_files:
+                _ensure_files_deletable(targets)
             await self.client.delete_ani(
                 [str(ani.get("id")) for ani in targets],
                 delete_files=delete_files,
@@ -407,6 +434,7 @@ class AniRssService:
         async with self._lock:
             items, _ = await self.list_subscriptions()
             target = _resolve_subscription(selector, items)
+            _ensure_writable_metadata(_other_items(items, target))
             updated = copy.deepcopy(target)
             entries = _normalized_standby(updated)
             _check_duplicate_url(updated, rss_url)
@@ -452,6 +480,7 @@ class AniRssService:
         async with self._lock:
             items, _ = await self.list_subscriptions()
             ani = _resolve_subscription(selector, items)
+            _ensure_writable_metadata(_other_items(items, ani))
             updated = copy.deepcopy(ani)
             entries = _normalized_standby(updated)
             index = _resolve_standby_index(entries, target)
@@ -489,6 +518,7 @@ class AniRssService:
         async with self._lock:
             items, _ = await self.list_subscriptions()
             ani = _resolve_subscription(selector, items)
+            _ensure_writable_metadata(_other_items(items, ani))
             updated = copy.deepcopy(ani)
             entries = _normalized_standby(updated)
             index = _resolve_standby_index(entries, target)
@@ -514,6 +544,7 @@ class AniRssService:
         async with self._lock:
             items, _ = await self.list_subscriptions()
             ani = _resolve_subscription(selector, items)
+            _ensure_writable_metadata(_other_items(items, ani))
             updated = copy.deepcopy(ani)
             entries = _normalized_standby(updated)
             index = _resolve_standby_index(entries, target)
@@ -621,6 +652,13 @@ class AniRssService:
     # ------------------------------------------------------------------
     # 内部工具
     # ------------------------------------------------------------------
+    async def _require_writable_metadata(self) -> list[dict[str, Any]]:
+        """读取订阅列表并确认现有数据可安全执行写操作。"""
+
+        items, _ = await self.list_subscriptions()
+        _ensure_writable_metadata(items)
+        return items
+
     def _build_rss_dto(
         self,
         *,
@@ -632,9 +670,11 @@ class AniRssService:
         standby_entries: list[dict[str, Any]] | None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         rss_url = validate_rss_url(url)
+        normalized_type = _normalize_rss_type(rss_type, self.default_rss_type)
+        _validate_rss_type_constraints(normalized_type, rss_url, bgm_url, subgroup)
         dto: dict[str, Any] = {
             "url": rss_url,
-            "type": _normalize_rss_type(rss_type, self.default_rss_type),
+            "type": normalized_type,
         }
         if bgm_url:
             dto["bgmUrl"] = validate_http_url(bgm_url, "BGM 地址")
@@ -656,6 +696,112 @@ class AniRssService:
             return await checker()
         except AniRssError:
             return None
+
+
+def _missing_metadata_fields(ani: dict[str, Any]) -> list[str]:
+    """返回 ani-rss 写操作会读取但当前缺失的字段。"""
+
+    return [field for field in _REQUIRED_METADATA_FIELDS if ani.get(field) is None]
+
+
+def _metadata_label(ani: dict[str, Any]) -> str:
+    """生成带 id 与标题状态的订阅简述。"""
+
+    title = ani.get("title")
+    if title is None:
+        title_text = "标题缺失"
+    elif not str(title).strip():
+        title_text = "标题为空"
+    else:
+        title_text = str(title)
+    return f"{ani.get('id') or '无 id'} | {title_text}"
+
+
+def _other_items(
+    items: list[dict[str, Any]],
+    target: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """返回除目标订阅外的其他订阅；ani-rss 写操作不会比较目标自身。"""
+
+    target_id = str(target.get("id") or "")
+    if target_id:
+        return [item for item in items if str(item.get("id") or "") != target_id]
+    return [item for item in items if item is not target]
+
+
+def _ensure_writable_metadata(items: list[dict[str, Any]]) -> None:
+    """阻止在缺少 title/season 的数据上执行 ani-rss 写操作。
+
+    上游 addAni/setAni 会直接调用 title.equals 与 season.equals，任一订阅
+    缺少这些字段都会抛空指针异常；提前失败可给出可操作的提示。
+    """
+
+    issues = [
+        (ani, fields) for ani in items if (fields := _missing_metadata_fields(ani))
+    ]
+    if not issues:
+        return
+
+    lines = [
+        f"检测到 {len(issues)} 个订阅缺少 title 或 season 字段。"
+        "ani-rss 在执行添加或修改订阅时会因空值报错，本次操作已取消。",
+        "请先删除这些订阅（使用完整 id，且不要带 files=true），再重新添加：",
+    ]
+    lines.extend(
+        f"- {_metadata_label(ani)} | 缺失：{', '.join(fields)}"
+        for ani, fields in issues[:10]
+    )
+    if len(issues) > 10:
+        lines.append(f"... 另有 {len(issues) - 10} 项")
+    raise AniRssValidationError("\n".join(lines))
+
+
+def _ensure_files_deletable(items: list[dict[str, Any]]) -> None:
+    """删除本地文件前确认标题存在，避免上游空指针导致静默失败。"""
+
+    issues = [ani for ani in items if ani.get("title") is None]
+    if not issues:
+        return
+
+    lines = [
+        "以下订阅缺少 title 字段，ani-rss 在删除本地文件时会触发空指针错误，"
+        "本次未执行删除。",
+        "可先不带 files=true 删除这些订阅，再重新添加：",
+    ]
+    lines.extend(f"- {_metadata_label(ani)}" for ani in issues[:10])
+    if len(issues) > 10:
+        lines.append(f"... 另有 {len(issues) - 10} 项")
+    raise AniRssValidationError("\n".join(lines))
+
+
+def _validate_rss_type_constraints(
+    rss_type: str,
+    url: str,
+    bgm_url: str | None,
+    subgroup: str | None,
+) -> None:
+    """提前校验各类 RSS 的必填参数，避免上游模糊的解析失败提示。"""
+
+    has_bgm = bool(str(bgm_url or "").strip())
+    params = parse_qs(urlsplit(url).query, keep_blank_values=True)
+
+    if rss_type == "other" and not has_bgm:
+        raise AniRssValidationError(
+            "type=other 时必须同时提供 bgm=<BGM 地址>，否则 ani-rss 会拒绝解析。",
+        )
+    if rss_type == "mikan" and subgroup and not has_bgm:
+        raise AniRssValidationError(
+            "mikan 类型单独指定 subgroup 时必须同时提供 bgm；"
+            "不指定 subgroup 时可由 ani-rss 自动解析。",
+        )
+    if rss_type == "ani-bt" and "bgmId" not in params:
+        raise AniRssValidationError(
+            "ani-bt 类型的 RSS 地址必须包含 bgmId 参数。",
+        )
+    if rss_type == "anime-garden" and "subject" not in params:
+        raise AniRssValidationError(
+            "anime-garden 类型的 RSS 地址必须包含 subject 参数。",
+        )
 
 
 def _flatten_list_ani(data: Any) -> tuple[list[dict[str, Any]], int]:
@@ -798,7 +944,11 @@ def _ambiguous_error(
 
 
 def _describe_ani(ani: dict[str, Any]) -> str:
-    title = str(ani.get("title") or "（无标题）")
+    raw_title = ani.get("title")
+    if raw_title is None:
+        title = "（标题缺失）"
+    else:
+        title = str(raw_title).strip() or "（标题为空）"
     season = ani.get("season")
     season_text = f" 第{season}季" if isinstance(season, int) else ""
     return f"- {ani.get('id') or '无 id'} | {title}{season_text}"

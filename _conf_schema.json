@@ -64,7 +64,7 @@
     "description": "允许使用本插件的用户",
     "type": "list",
     "default": [],
-    "hint": "为空时仅 AstrBot 全局管理员可用。推荐填写 platform:UID，例如 qq:123456；也兼容仅 UID。使用 /sid 获取 UID。",
+    "hint": "为空时仅 AstrBot 全局管理员可用。推荐填写 平台名:UID，例如 aiocqhttp:123456；也兼容仅 UID。使用 /sid 获取 UID。",
     "obvious_hint": true
   },
   "allow_delete_files": {

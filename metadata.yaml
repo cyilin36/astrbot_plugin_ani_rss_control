@@ -5,4 +5,4 @@ desc: 连接 ani-rss 3.x Web API，支持订阅列表与详情、主 RSS 与备�
 version: 0.1.0-beta1
 author: cyilin36
 repo: https://github.com/cyilin36/astrbot_plugin_ani_rss_control
-astrbot_version: ">=4.5.7"
+astrbot_version: ">=4.26.8"

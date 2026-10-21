@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from .ani_rss_errors import AniRssValidationError
 
-_CONFIRM_WORDS = {"确认", "確定", "确定", "confirm"}
+_CONFIRM_WORDS = {"确认", "確認", "確定", "确定", "confirm"}
 _KV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*=")
 _TRUE_WORDS = {"1", "true", "yes", "on", "开", "是"}
 _FALSE_WORDS = {"0", "false", "no", "off", "关", "否"}

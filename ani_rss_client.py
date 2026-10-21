@@ -173,10 +173,23 @@ class AniRssClient:
             params={"override": override},
         )
 
-    async def set_ani(self, ani: Mapping[str, Any]) -> Any:
-        """修改订阅。"""
+    async def set_ani(
+        self,
+        ani: Mapping[str, Any],
+        *,
+        move: bool = False,
+    ) -> Any:
+        """修改订阅。
 
-        return await self._request("setAni", payload=dict(ani))
+        ``move`` 对应 ani-rss 的 ``move`` 查询参数，仅在为 true 时移动
+        已下载的视频文件。
+        """
+
+        return await self._request(
+            "setAni",
+            payload=dict(ani),
+            params={"move": move},
+        )
 
     async def delete_ani(
         self,
