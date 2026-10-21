@@ -51,8 +51,10 @@ from .ani_rss_format import (
     format_total_result,
 )
 from .ani_rss_service import EDITABLE_FIELDS, AniRssService
+from .ani_rss_tools import ALL_TOOL_CLASSES
 
 PLUGIN_VERSION = "0.1.0-beta1"
+_TOOL_RESULT_MAX_CHARS = 6000
 
 _ADD_OPTIONS = {
     "type",
@@ -141,6 +143,9 @@ class AniRssControlPlugin(Star):
             default_rss_type=self.default_rss_type,
             logger=logger,
         )
+        self.context.add_llm_tools(
+            *(tool_cls(plugin=self) for tool_cls in ALL_TOOL_CLASSES),
+        )
 
     async def terminate(self) -> None:
         """插件卸载或重载时关闭 HTTP 会话。"""
@@ -177,7 +182,7 @@ class AniRssControlPlugin(Star):
         """显示帮助。"""
 
         for chunk in chunk_text(
-            format_help(PLUGIN_VERSION),
+            self._help_text(),
             self.max_message_chars,
         ):
             yield event.plain_result(chunk)
@@ -843,6 +848,38 @@ class AniRssControlPlugin(Star):
         elif inspect.isawaitable(result):
             await result
 
+    def _help_text(self) -> str:
+        """返回完整帮助文本。"""
+
+        return format_help(PLUGIN_VERSION)
+
+    async def _run_tool(
+        self,
+        event: AstrMessageEvent,
+        operation: str,
+        action: Callable[[], Awaitable[Any]],
+        render: Callable[[Any], str],
+    ) -> str:
+        """执行 LLM 工具请求，统一处理鉴权、异常与长度限制。"""
+
+        auth_error = self._auth_error(event)
+        if auth_error:
+            return auth_error
+
+        try:
+            data = await action()
+            text = render(data)
+        except AniRssError as exc:
+            logger.warning("ani-rss 工具 %s 失败：%s", operation, exc)
+            return self._error_text(exc, operation)
+        except Exception:
+            logger.exception("ani-rss 工具 %s 发生未预期异常", operation)
+            return "操作失败，请查看 AstrBot 日志。"
+
+        if not isinstance(text, str) or not text.strip():
+            text = "操作完成。"
+        return _truncate_tool_text(text, _TOOL_RESULT_MAX_CHARS)
+
     async def _execute(
         self,
         event: AstrMessageEvent,
@@ -985,6 +1022,14 @@ class AniRssControlPlugin(Star):
         return {
             text for item in items if item is not None and (text := str(item).strip())
         }
+
+
+def _truncate_tool_text(text: str, limit: int) -> str:
+    """截断过长的工具结果，避免占用过多模型上下文。"""
+
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "\n...（结果过长，已截断；请缩小查询范围后重试）"
 
 
 def _looks_like_upstream_npe(message: str) -> bool:

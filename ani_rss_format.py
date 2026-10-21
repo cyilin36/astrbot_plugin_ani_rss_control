@@ -121,7 +121,8 @@ def format_help(version: str) -> str:
 match/exclude 用 | 分隔；规则本身含竖线时可用 JSON 数组，例如 match=["a|b"]。
 编辑标题、季或下载路径时，ani-rss 默认不会移动已下载视频；需要移动请追加 move=true。
 download_path 仅在同时设置 custom_download_path=true 时生效。
-编辑可用字段：{_EDITABLE_FIELDS_TEXT}。"""
+编辑可用字段：{_EDITABLE_FIELDS_TEXT}。
+AI 工具：AstrBot 中的 AI 可调用 ani_rss_query、ani_rss_subscription、ani_rss_standby（需模型支持 function calling）。"""
 
 
 def format_subscription_list(data: dict[str, Any]) -> str:
