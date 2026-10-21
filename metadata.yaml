@@ -2,7 +2,7 @@ name: astrbot_plugin_ani_rss_control
 display_name: ani-rss 控制
 short_desc: 通过 AstrBot 管理 ani-rss 的主/备 RSS 订阅与下载任务。
 desc: 连接 ani-rss 3.x Web API，支持订阅列表与详情、主 RSS 与备用 RSS 的增删改、启用停用、刷新、总集数更新、RSS 解析预览、下载路径与下载任务查询。
-version: 0.1.1
+version: 0.1.0-beta1
 author: cyilin36
 repo: https://github.com/cyilin36/astrbot_plugin_ani_rss_control
 astrbot_version: ">=4.5.7"

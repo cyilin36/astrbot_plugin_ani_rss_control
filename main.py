@@ -50,7 +50,7 @@ from .ani_rss_format import (
 )
 from .ani_rss_service import EDITABLE_FIELDS, AniRssService
 
-PLUGIN_VERSION = "0.1.1"
+PLUGIN_VERSION = "0.1.0-beta1"
 
 _ADD_OPTIONS = {
     "type",
