@@ -438,23 +438,32 @@ def format_status(data: dict[str, Any]) -> str:
             lines.append(f"原因：{data.get('error')}")
         return "\n".join(lines)
 
-    lines.append("连接：正常")
-    about = data.get("about")
-    if isinstance(about, dict):
-        if about.get("version"):
-            lines.append(f"版本：{about.get('version')}")
-        if about.get("latest"):
-            latest = about.get("latest")
-            update = "可更新" if about.get("update") else "已是最新"
-            lines.append(f"最新：{latest}（{update}）")
-    elif data.get("about_error"):
-        about_error = str(data.get("about_error"))
-        lines.append(f"版本信息：获取失败（{about_error}）")
-        if "鉴权" in about_error or "401" in about_error or "403" in about_error:
-            lines.append(
-                "鉴权：失败。ping 无需鉴权，连接正常仅代表服务可达；"
-                "请检查 api_key、token 或账号密码配置。",
-            )
+    probe = str(data.get("probe") or "").strip()
+    lines.append(f"连接：正常（通过 {probe} 验证）" if probe else "连接：正常")
+
+    if data.get("auth_ok") is False:
+        auth_error = data.get("auth_error") or data.get("about_error") or "未知原因"
+        lines.append(f"鉴权：失败（{auth_error}）")
+        lines.append("请检查 api_key、token 或账号密码配置。")
+    else:
+        about = data.get("about")
+        if isinstance(about, dict):
+            if about.get("version"):
+                lines.append(f"版本：{about.get('version')}")
+            if about.get("latest"):
+                latest = about.get("latest")
+                update = "可更新" if about.get("update") else "已是最新"
+                lines.append(f"最新：{latest}（{update}）")
+        elif data.get("about_error"):
+            lines.append(f"版本信息：获取失败（{data.get('about_error')}）")
+            if data.get("probe") == "/api/listAni":
+                lines.append(
+                    "该 ani-rss 版本或反向代理可能不提供 /api/about，"
+                    "不影响订阅与下载任务操作。",
+                )
+
+    if data.get("error"):
+        lines.append(f"错误：{data.get('error')}")
 
     standby = data.get("standby_rss")
     if standby is True:

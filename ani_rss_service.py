@@ -15,6 +15,9 @@ from .ani_rss_args import parse_bool, parse_int, parse_list
 from .ani_rss_client import AniRssClient
 from .ani_rss_errors import (
     AniRssAPIError,
+    AniRssAuthError,
+    AniRssConfigError,
+    AniRssConnectionError,
     AniRssError,
     AniRssValidationError,
 )
@@ -619,32 +622,69 @@ class AniRssService:
         }
 
     async def status(self) -> dict[str, Any]:
-        """汇总连接、版本与备用 RSS 开关。"""
+        """汇总连接、鉴权、版本与备用 RSS 开关。
+
+        以带鉴权的 ``/api/about`` 作为主探测；部分 ani-rss 版本或反向代理
+        不提供该接口时，回退到核心的 ``/api/listAni``。``/api/ping`` 不是
+        所有部署都可用，且无法验证鉴权，因此不再作为唯一判据。
+        """
 
         result: dict[str, Any] = {
             "base_url": getattr(self.client, "base_url", ""),
             "auth_mode": getattr(self.client, "auth_mode", "none"),
             "ping_ok": False,
+            "auth_ok": None,
+            "probe": None,
             "about": None,
             "about_error": None,
+            "auth_error": None,
             "standby_rss": None,
             "error": None,
         }
 
-        try:
-            await self.client.ping()
-        except AniRssError as exc:
-            result["error"] = str(exc)
-            return result
-
-        result["ping_ok"] = True
-
+        about_error: AniRssError | None = None
         try:
             about = await self.client.about()
+        except AniRssAuthError as exc:
+            result["ping_ok"] = True
+            result["auth_ok"] = False
+            result["auth_error"] = str(exc)
+            result["about_error"] = str(exc)
+            result["probe"] = "/api/about"
+            return result
+        except AniRssConfigError as exc:
+            result["error"] = str(exc)
+            return result
+        except AniRssError as exc:
+            about_error = exc
+        else:
+            result["ping_ok"] = True
+            result["auth_ok"] = True
+            result["probe"] = "/api/about"
             if isinstance(about, dict):
                 result["about"] = about
-        except AniRssError as exc:
-            result["about_error"] = str(exc)
+
+        if about_error is not None:
+            result["about_error"] = str(about_error)
+            try:
+                await self.client.list_ani()
+            except AniRssAuthError as exc:
+                result["ping_ok"] = True
+                result["auth_ok"] = False
+                result["auth_error"] = str(exc)
+                result["probe"] = "/api/listAni"
+                return result
+            except AniRssConfigError as exc:
+                result["error"] = str(exc)
+                return result
+            except AniRssError as exc:
+                result["error"] = str(exc)
+                result["ping_ok"] = not isinstance(exc, AniRssConnectionError)
+                return result
+            else:
+                result["ping_ok"] = True
+                result["auth_ok"] = True
+                result["probe"] = "/api/listAni"
 
         result["standby_rss"] = await self._standby_enabled_safe()
         return result
