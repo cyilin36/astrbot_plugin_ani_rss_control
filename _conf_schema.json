@@ -1,0 +1,94 @@
+{
+  "base_url": {
+    "description": "ani-rss 服务地址",
+    "type": "string",
+    "default": "http://127.0.0.1:7789",
+    "hint": "例如 http://127.0.0.1:7789。使用反向代理时可填写包含子路径的地址；不要以 /api 结尾，也不要包含账号密码、查询参数。",
+    "obvious_hint": true
+  },
+  "api_key": {
+    "description": "ani-rss API Key",
+    "type": "string",
+    "default": "",
+    "hint": "推荐使用。在 ani-rss 设置-安全设置中生成；只作为请求头发送，不写入日志或消息。",
+    "secret": true,
+    "obvious_hint": true
+  },
+  "token": {
+    "description": "ani-rss 登录 Token",
+    "type": "string",
+    "default": "",
+    "hint": "可选。填写 ani-rss 登录接口返回的 JWT；一般优先使用 API Key。Token 过期后需要更新。",
+    "secret": true
+  },
+  "username": {
+    "description": "ani-rss 登录用户名",
+    "type": "string",
+    "default": "",
+    "hint": "仅在未配置 API Key 和 Token 时使用。"
+  },
+  "password": {
+    "description": "ani-rss 登录密码",
+    "type": "string",
+    "default": "",
+    "hint": "填写明文密码，插件会按 ani-rss 要求做 MD5。账号登录可能顶掉 WebUI 会话，建议优先使用 API Key。",
+    "secret": true
+  },
+  "request_timeout": {
+    "description": "普通 API 超时秒数",
+    "type": "int",
+    "default": 15,
+    "hint": "允许范围 1 到 120。"
+  },
+  "rss_timeout": {
+    "description": "RSS 解析超时秒数",
+    "type": "int",
+    "default": 60,
+    "hint": "rssToAni 需要抓取 RSS 与 BGM 信息，允许范围 5 到 300。"
+  },
+  "verify_tls": {
+    "description": "校验 TLS 证书",
+    "type": "bool",
+    "default": true,
+    "hint": "仅在自签名证书等特殊环境下关闭。"
+  },
+  "default_rss_type": {
+    "description": "默认 RSS 类型",
+    "type": "string",
+    "default": "mikan",
+    "options": ["mikan", "ani-bt", "anime-garden", "other"],
+    "labels": ["Mikan", "AniBT", "AnimeGarden", "其他"],
+    "hint": "添加订阅未指定 type 时使用。"
+  },
+  "authorized_uids": {
+    "description": "允许使用本插件的用户",
+    "type": "list",
+    "default": [],
+    "hint": "为空时仅 AstrBot 全局管理员可用。推荐填写 platform:UID，例如 qq:123456；也兼容仅 UID。使用 /sid 获取 UID。",
+    "obvious_hint": true
+  },
+  "allow_delete_files": {
+    "description": "允许删除订阅时同时删除本地文件",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭。开启后仍需在删除指令中显式追加 files=true 与「确认」。"
+  },
+  "page_size": {
+    "description": "订阅列表默认每页条数",
+    "type": "int",
+    "default": 10,
+    "hint": "允许范围 1 到 50。"
+  },
+  "max_message_chars": {
+    "description": "单条消息最大字符数",
+    "type": "int",
+    "default": 1500,
+    "hint": "超过后按行拆分为多条消息，允许范围 500 到 4000。"
+  },
+  "mask_rss_urls": {
+    "description": "在回复中遮蔽 RSS URL 的敏感查询参数",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后会遮蔽 token、key、password、secret、sign 等查询参数的值。"
+  }
+}

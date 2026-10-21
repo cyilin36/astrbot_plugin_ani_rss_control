@@ -1,0 +1,54 @@
+# 本地工作区：禁止入库
+/.local/
+/.venv/
+/venv/
+
+# 本地开发规范：仅保留在本地，不进入仓库
+/AGENTS.md
+
+# 测试代码仅本地保留，禁止入库
+/tests/
+
+# 本地调试数据与上游副本
+/data/
+/temp_astrbot/
+/AstrBot/
+/AstrBot-docs/
+/astrbot-docs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.whl
+
+# 编辑器与系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# 密钥与本地配置
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+cookie*.txt
+*_config.local.json
+
+# 日志与临时产物
+*.log
+*.tmp
