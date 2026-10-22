@@ -43,13 +43,6 @@ _EDITABLE_FIELDS_TEXT = (
     "omit, global_exclude, upload, message"
 )
 
-_AUTH_MODE_LABELS = {
-    "api_key": "API Key",
-    "token": "Token",
-    "password": "账号密码",
-    "none": "无（依赖 IP 白名单）",
-}
-
 _STATE_LABELS = {
     "unknown": "未知",
     "forcedDL": "强制下载",
@@ -88,7 +81,7 @@ def format_help(version: str) -> str:
   /ani info <订阅>
   /ani add <RSS> [type=] [bgm=] [subgroup=] [title=] [season=] [offset=] [enable=] [match=] [exclude=] [standby=标签|URL|偏移 ...] [override=true 确认]
   /ani edit <订阅> [字段=值 ...] [move=true]
-  /ani delete <订阅...> [files=true] [确认]
+  /ani delete <订阅...> [files=true]
 
 片源
   /ani search [关键词] [source=mikan|ani-bt|anime-garden] [season=2026春] [bgm=] [limit=10]
@@ -101,7 +94,7 @@ def format_help(version: str) -> str:
   /ani main add <RSS> [同上]
   /ani main show <订阅>
   /ani main set <订阅> <RSS>
-  /ani main delete <订阅> [files=true] [确认]
+  /ani main delete <订阅> [files=true]
 
 备用 RSS
   /ani standby list <订阅>
@@ -123,7 +116,7 @@ def format_help(version: str) -> str:
 
 订阅可用完整 id、唯一 id 前缀或标题指定；标题后可加 #季，例如 葬送的芙莉莲#2。
 单订阅指令的标题含空格时可直接填写；delete、enable、disable、refresh、total 等可指定多个订阅的指令，请为每个标题加引号。
-删除订阅需追加「确认」。删除本地文件还需配置 allow_delete_files=true 并追加 files=true。
+删除订阅会立即执行；如需同时删除本地文件，需配置 allow_delete_files=true 并追加 files=true。
 覆盖已有订阅需 override=true 与「确认」。
 match/exclude 用 | 分隔；规则本身含竖线时可用 JSON 数组，例如 match=["a|b"]。
 编辑标题、季或下载路径时，ani-rss 默认不会移动已下载视频；需要移动请追加 move=true。
@@ -304,28 +297,6 @@ def format_edit_result(data: dict[str, Any], *, mask_urls: bool = False) -> str:
         lines.append("提示：主 RSS 已更换，建议执行 /ani refresh 重新抓取元数据。")
     if "download_path" in changed and not ani.get("customDownloadPath"):
         lines.append("提示：download_path 仅在 custom_download_path=true 时生效。")
-    return "\n".join(lines)
-
-
-def format_delete_preview(data: dict[str, Any]) -> str:
-    """格式化删除预览。"""
-
-    items = list(data.get("items") or [])
-    delete_files = bool(data.get("delete_files"))
-    file_text = "同时删除" if delete_files else "保留"
-    lines = [
-        f"将删除 {len(items)} 个订阅；本地文件：{file_text}",
-        "ani-rss 会同时删除种子记录，删除在服务端异步执行。",
-        "",
-    ]
-    for ani in items:
-        lines.append(f"- {_title(ani)} | ID：{ani.get('id') or '未知'}")
-    lines.append("")
-    lines.append("如确认删除，请追加「确认」。")
-    if not delete_files:
-        lines.append(
-            "如需同时删除本地文件，请先开启插件配置 allow_delete_files，再追加 files=true 与「确认」。",
-        )
     return "\n".join(lines)
 
 
@@ -579,11 +550,10 @@ def _episode_label(value: Any) -> str:
 def format_status(data: dict[str, Any]) -> str:
     """格式化连接状态。"""
 
-    auth_mode = str(data.get("auth_mode") or "none")
     lines = [
         "ani-rss 状态",
         f"地址：{data.get('base_url') or '未配置'}",
-        f"鉴权：{_AUTH_MODE_LABELS.get(auth_mode, auth_mode)}",
+        "鉴权：API Key",
     ]
 
     if not data.get("ping_ok"):
@@ -598,7 +568,7 @@ def format_status(data: dict[str, Any]) -> str:
     if data.get("auth_ok") is False:
         auth_error = data.get("auth_error") or data.get("about_error") or "未知原因"
         lines.append(f"鉴权：失败（{auth_error}）")
-        lines.append("请检查 api_key、token 或账号密码配置。")
+        lines.append("请检查 api_key 配置。")
     else:
         about = data.get("about")
         if isinstance(about, dict):

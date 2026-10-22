@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 from collections.abc import Mapping
 from typing import Any
@@ -68,9 +67,6 @@ class AniRssClient:
         base_url: str,
         *,
         api_key: str = "",
-        token: str = "",
-        username: str = "",
-        password: str = "",
         timeout: int = 15,
         rss_timeout: int = 60,
         verify_tls: bool = True,
@@ -86,15 +82,8 @@ class AniRssClient:
             self._config_error = exc
 
         self._api_key = (api_key or "").strip()
-        self._token = (token or "").strip()
-        self._username = (username or "").strip()
-        self._password = password or ""
-        self._auth_mode = self._resolve_auth_mode()
-
-        if self._auth_mode == "password" and (not self._username or not self._password):
-            self._config_error = AniRssConfigError(
-                "账号登录需要同时配置 username 和 password。",
-            )
+        if self._config_error is None and not self._api_key:
+            self._config_error = AniRssConfigError("未配置 ani-rss API Key。")
 
         self._timeout = max(1, min(120, int(timeout)))
         self._rss_timeout = max(5, min(300, int(rss_timeout)))
@@ -103,29 +92,13 @@ class AniRssClient:
         self._external_session = session
         self._session = session
         self._owns_session = session is None
-        self._login_lock = asyncio.Lock()
         self._session_lock = asyncio.Lock()
-
-    def _resolve_auth_mode(self) -> str:
-        if self._api_key:
-            return "api_key"
-        if self._token:
-            return "token"
-        if self._username or self._password:
-            return "password"
-        return "none"
 
     @property
     def base_url(self) -> str:
         """返回规范化后的地址；配置错误时返回原始输入。"""
 
         return self._base_url or self._raw_base_url
-
-    @property
-    def auth_mode(self) -> str:
-        """返回当前鉴权方式。"""
-
-        return self._auth_mode
 
     @property
     def is_configured(self) -> bool:
@@ -355,35 +328,17 @@ class AniRssClient:
         params: Mapping[str, Any] | None = None,
         timeout: int | None = None,
         authenticate: bool = True,
-        auth_retry: bool = True,
     ) -> Any:
         if self._config_error is not None:
             raise self._config_error
 
-        try:
-            return await self._request_once(
-                endpoint,
-                payload=payload,
-                params=params,
-                timeout=timeout,
-                authenticate=authenticate,
-            )
-        except AniRssAuthError:
-            if (
-                authenticate
-                and auth_retry
-                and self._auth_mode == "password"
-                and self._token
-            ):
-                self._token = ""
-                return await self._request_once(
-                    endpoint,
-                    payload=payload,
-                    params=params,
-                    timeout=timeout,
-                    authenticate=authenticate,
-                )
-            raise
+        return await self._request_once(
+            endpoint,
+            payload=payload,
+            params=params,
+            timeout=timeout,
+            authenticate=authenticate,
+        )
 
     async def _request_once(
         self,
@@ -501,40 +456,7 @@ class AniRssClient:
             return self._session
 
     async def _auth_headers(self) -> dict[str, str]:
-        if self._api_key:
-            return {"api-key": self._api_key}
-        if self._token:
-            return {"Authorization": self._token}
-        if self._auth_mode == "password":
-            token = await self._login()
-            return {"Authorization": token}
-        return {}
-
-    async def _login(self) -> str:
-        async with self._login_lock:
-            if self._token:
-                return self._token
-
-            payload = {
-                "username": self._username,
-                "password": hashlib.md5(
-                    self._password.encode("utf-8"),
-                ).hexdigest(),
-            }
-            try:
-                data = await self._request(
-                    "login",
-                    payload=payload,
-                    authenticate=False,
-                    auth_retry=False,
-                )
-            except AniRssAPIError as exc:
-                raise AniRssAuthError(f"登录失败：{exc.message}") from exc
-
-            if not isinstance(data, str) or not data.strip():
-                raise AniRssAuthError("登录失败：ani-rss 未返回 Token。")
-            self._token = data.strip()
-            return self._token
+        return {"api-key": self._api_key}
 
     def _debug(self, message: str) -> None:
         if self._logger is not None:

@@ -19,7 +19,6 @@ from .ani_rss_args import expand_selectors, parse_standby_specs
 from .ani_rss_errors import AniRssValidationError
 from .ani_rss_format import (
     format_add_result,
-    format_delete_preview,
     format_delete_result,
     format_downloads,
     format_edit_result,
@@ -476,7 +475,7 @@ class AniRssSubscriptionTool(_AniRssTool):
         "group（字幕组序号或名称），用于直接订阅搜索结果中的字幕组；"
         "edit 需要 selector 和至少一个待修改字段；delete/set_enabled 需要 targets；"
         "refresh 可传 targets（为空表示全部）；update_total 可传 targets（默认 all）和 force。"
-        "危险操作：delete 先不要传 confirm，先向用户展示预览，用户明确同意后再传 confirm=true；"
+        "危险操作：delete 会立即删除订阅，执行前先向用户确认目标；"
         "files=true 仅当用户明确要求删除本地文件且插件配置允许时使用；"
         "add/add_group 的 override=true 必须同时传 confirm=true。"
         "修改标题、季或下载路径时默认不移动已下载视频，只有用户明确要求移动时才传 move=true。"
@@ -604,7 +603,7 @@ class AniRssSubscriptionTool(_AniRssTool):
                 },
                 "confirm": {
                     "type": _BOOLEAN_SCHEMA,
-                    "description": "add 覆盖或 delete 执行删除时的确认，默认 false。",
+                    "description": "add/add_group 覆盖已有订阅时的确认，默认 false。",
                 },
                 "files": {
                     "type": _BOOLEAN_SCHEMA,
@@ -701,14 +700,7 @@ class AniRssSubscriptionTool(_AniRssTool):
             data = await plugin.service.delete_subscriptions(
                 selectors,
                 delete_files=_as_bool(values.get("files"), "files"),
-                confirmed=_as_bool(values.get("confirm"), "confirm"),
             )
-            if data.get("preview"):
-                return (
-                    format_delete_preview(data)
-                    + "\n再次调用 ani_rss_subscription（action=delete）并传 "
-                    "confirm=true 才会执行删除。"
-                )
             return format_delete_result(data)
 
         if act == "set_enabled":

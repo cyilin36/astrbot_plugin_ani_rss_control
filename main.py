@@ -33,7 +33,6 @@ from .ani_rss_errors import (
 from .ani_rss_format import (
     chunk_text,
     format_add_result,
-    format_delete_preview,
     format_delete_result,
     format_downloads,
     format_edit_result,
@@ -112,9 +111,6 @@ class AniRssControlPlugin(Star):
 
         self.base_url = self._cfg_str("base_url", "http://127.0.0.1:7789")
         self.api_key = self._cfg_str("api_key", "")
-        self.token = self._cfg_str("token", "")
-        self.username = self._cfg_str("username", "")
-        self.password = self._cfg_str("password", "")
         self.request_timeout = self._cfg_int(
             "request_timeout",
             15,
@@ -146,9 +142,6 @@ class AniRssControlPlugin(Star):
         self.client = AniRssClient(
             self.base_url,
             api_key=self.api_key,
-            token=self.token,
-            username=self.username,
-            password=self.password,
             timeout=self.request_timeout,
             rss_timeout=self.rss_timeout,
             verify_tls=self.verify_tls,
@@ -293,7 +286,7 @@ class AniRssControlPlugin(Star):
             event,
             "delete",
             lambda: self._do_delete(args),
-            _render_delete,
+            format_delete_result,
         ):
             yield result
 
@@ -544,7 +537,7 @@ class AniRssControlPlugin(Star):
             event,
             "main delete",
             lambda: self._do_delete(args),
-            _render_delete,
+            format_delete_result,
         ):
             yield result
 
@@ -714,17 +707,16 @@ class AniRssControlPlugin(Star):
         parsed = parse_args(
             raw,
             allowed_options=_DELETE_OPTIONS,
-            allowed_flags={"files", "confirm"},
+            allowed_flags={"files"},
         )
         selectors = expand_selectors(parsed.positionals)
         if not selectors:
             raise AniRssValidationError(
-                "用法：/ani delete <订阅...> [files=true] [确认]",
+                "用法：/ani delete <订阅...> [files=true]",
             )
         return await self.service.delete_subscriptions(
             selectors,
             delete_files=bool(parsed.bool("files", False)),
-            confirmed=parsed.has_flag("confirm"),
         )
 
     async def _do_enabled(self, raw: str, enabled: bool) -> dict[str, Any]:
@@ -1098,7 +1090,7 @@ class AniRssControlPlugin(Star):
         if isinstance(exc, AniRssValidationError):
             return str(exc)
         if isinstance(exc, AniRssAuthError):
-            return f"ani-rss 鉴权失败：{exc}\n请检查 api_key、token 或账号密码配置。"
+            return f"ani-rss 鉴权失败：{exc}\n请检查 api_key 配置。"
         if isinstance(exc, AniRssDuplicateError):
             if operation in {"add", "main add"}:
                 return (
@@ -1285,9 +1277,3 @@ def _parse_episode(raw: str) -> float:
     if value <= 0:
         raise AniRssValidationError("集数必须大于 0。")
     return value
-
-
-def _render_delete(data: dict[str, Any]) -> str:
-    if data.get("preview"):
-        return format_delete_preview(data)
-    return format_delete_result(data)

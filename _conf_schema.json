@@ -7,32 +7,12 @@
     "obvious_hint": true
   },
   "api_key": {
-    "description": "ani-rss API Key",
+    "description": "ani-rss API Key（必填）",
     "type": "string",
     "default": "",
-    "hint": "推荐使用。在 ani-rss 设置-安全设置中生成；只作为请求头发送，不写入日志或消息。",
+    "hint": "必填。在 ani-rss 设置-安全设置中生成；只作为 api-key 请求头发送，不写入日志或消息。",
     "secret": true,
     "obvious_hint": true
-  },
-  "token": {
-    "description": "ani-rss 登录 Token",
-    "type": "string",
-    "default": "",
-    "hint": "可选。填写 ani-rss 登录接口返回的 JWT；一般优先使用 API Key。Token 过期后需要更新。",
-    "secret": true
-  },
-  "username": {
-    "description": "ani-rss 登录用户名",
-    "type": "string",
-    "default": "",
-    "hint": "仅在未配置 API Key 和 Token 时使用。"
-  },
-  "password": {
-    "description": "ani-rss 登录密码",
-    "type": "string",
-    "default": "",
-    "hint": "填写明文密码，插件会按 ani-rss 要求做 MD5。账号登录可能顶掉 WebUI 会话，建议优先使用 API Key。",
-    "secret": true
   },
   "request_timeout": {
     "description": "普通 API 超时秒数",

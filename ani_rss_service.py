@@ -304,9 +304,8 @@ class AniRssService:
         selectors: Iterable[str],
         *,
         delete_files: bool = False,
-        confirmed: bool = False,
     ) -> dict[str, Any]:
-        """删除订阅。未确认时只返回预览。"""
+        """删除订阅。"""
 
         selector_list = [item.strip() for item in selectors if item.strip()]
         if not selector_list:
@@ -332,13 +331,6 @@ class AniRssService:
                 seen.add(ani_id)
                 targets.append(ani)
 
-            if not confirmed:
-                return {
-                    "preview": True,
-                    "items": targets,
-                    "delete_files": delete_files,
-                }
-
             if delete_files:
                 _ensure_files_deletable(targets)
             await self.client.delete_ani(
@@ -346,7 +338,6 @@ class AniRssService:
                 delete_files=delete_files,
             )
             return {
-                "preview": False,
                 "items": targets,
                 "delete_files": delete_files,
             }
@@ -823,7 +814,6 @@ class AniRssService:
 
         result: dict[str, Any] = {
             "base_url": getattr(self.client, "base_url", ""),
-            "auth_mode": getattr(self.client, "auth_mode", "none"),
             "ping_ok": False,
             "auth_ok": None,
             "probe": None,
