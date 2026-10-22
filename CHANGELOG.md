@@ -2,6 +2,16 @@
 
 本文件记录插件版本变更。
 
+## 0.1.0-beta4 - 2026-10-22
+
+### 变更
+
+- 鉴权方式统一为 ani-rss API Key，`api_key` 改为必填项。
+- 移除 `token`、`username`、`password` 配置，以及 Token 鉴权、账号密码登录与自动重试逻辑。
+- 删除订阅不再需要二次确认，`/ani delete` 与 `/ani main delete` 会立即执行。
+- 保留 `override=true` 的确认机制，以及 `files=true` 删除本地文件时的 `allow_delete_files` 配置保护。
+- 同步更新 README 中的配置与删除指令说明。
+
 ## 0.1.0-beta3 - 2026-10-22
 
 ### 新增
