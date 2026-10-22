@@ -2,6 +2,21 @@
 
 本文件记录插件版本变更。
 
+## 0.1.0-beta3 - 2026-10-22
+
+### 新增
+
+- 新增 `/ani search`，按关键词或季度搜索 Mikan、AniBT、AnimeGarden 片源，结果带 `ref` 引用。
+- 新增 `/ani groups`，按 `ref` 查看字幕组、RSS 与剧集列表。
+- 新增 `/ani magnet`，查询指定字幕组某一集的磁力链与种子链接。
+- 新增 `/ani sub`，直接订阅搜索结果中的指定字幕组，复用现有 RSS 解析与添加流程。
+- `ani_rss_query` 新增 `search`、`groups`、`magnet` 动作；`ani_rss_subscription` 新增 `add_group` 动作。
+- 新增 `search_limit` 配置项，控制片源搜索结果条数。
+
+### 变更
+
+- `rss_timeout` 同时用于片源搜索请求。
+
 ## 0.1.0-beta2 - 2026-10-21
 
 ### 新增
