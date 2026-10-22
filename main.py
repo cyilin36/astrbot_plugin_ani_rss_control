@@ -56,7 +56,7 @@ from .ani_rss_format import (
 from .ani_rss_service import EDITABLE_FIELDS, AniRssService
 from .ani_rss_tools import ALL_TOOL_CLASSES
 
-PLUGIN_VERSION = "0.1.0-beta2"
+PLUGIN_VERSION = "0.1.0-beta3"
 _TOOL_RESULT_MAX_CHARS = 6000
 
 _ADD_OPTIONS = {
